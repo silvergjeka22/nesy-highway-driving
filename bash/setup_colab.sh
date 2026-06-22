@@ -1,38 +1,53 @@
 #!/usr/bin/env bash
-# Colab bootstrap for Part 1.
-#   - clone (or pull) the repo into the Colab workspace
+# Colab bootstrap for Part 1 (PRIVATE repo — needs a GitHub token).
+#   - clone (or pull) the private repo into the Colab workspace using $GITHUB_TOKEN
 #   - install dependencies
 #   - create the Google Drive results folders
 #   - print the paths the notebook will use
 #
-# Usage (from the notebook, after mounting Drive):
-#   !bash bash/setup_colab.sh
-# or, on a fresh runtime before the repo exists:
-#   !bash <(curl -fsSL <raw-url>/bash/setup_colab.sh)
+# The notebook loads the token first (Colab userdata or hidden prompt), exports
+# it as GITHUB_TOKEN, then fetches THIS script over an authenticated curl and
+# runs it. The token is used only to clone, then scrubbed from the git remote so
+# it is never written to disk in .git/config.
 #
 # Env overrides:
-#   REPO_URL   git remote (default: this project's GitHub URL — edit below)
-#   WORKDIR    where to clone (default: /content/nesy-highway-driving)
-#   DRIVE_ROOT Drive results root (default matches configs/highway.yaml)
+#   GITHUB_TOKEN  (required) GitHub PAT with read access to the private repo
+#   GH_USER       GitHub owner   (default: silvergjeka22)
+#   REPO          repo name      (default: nesy-highway-driving)
+#   WORKDIR       clone target   (default: /content/nesy-highway-driving)
+#   DRIVE_ROOT    Drive results root (default matches configs/highway.yaml)
 
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/silvergjeka22/nesy-highway-driving.git}"
-WORKDIR="${WORKDIR:-/content/nesy-highway-driving}"
+GH_USER="${GH_USER:-silvergjeka22}"
+REPO="${REPO:-nesy-highway-driving}"
+WORKDIR="${WORKDIR:-/content/${REPO}}"
 DRIVE_ROOT="${DRIVE_ROOT:-/content/drive/MyDrive/nesy-highway-driving}"
 
-echo "==> Repo:       $REPO_URL"
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+  echo "ERROR: GITHUB_TOKEN is not set. Load the token in the notebook first." >&2
+  exit 1
+fi
+
+AUTH_URL="https://${GH_USER}:${GITHUB_TOKEN}@github.com/${GH_USER}/${REPO}.git"
+CLEAN_URL="https://github.com/${GH_USER}/${REPO}.git"
+
+echo "==> Repo:       ${GH_USER}/${REPO} (private)"
 echo "==> Workdir:    $WORKDIR"
 echo "==> Drive root: $DRIVE_ROOT"
 
-# 1. Clone or update the repo.
+# 1. Clone or update the repo (token used only here).
 if [ -d "$WORKDIR/.git" ]; then
   echo "==> Repo exists; pulling latest."
+  git -C "$WORKDIR" remote set-url origin "$AUTH_URL"
   git -C "$WORKDIR" pull --ff-only
 else
-  echo "==> Cloning repo."
-  git clone "$REPO_URL" "$WORKDIR"
+  echo "==> Cloning private repo."
+  git clone "$AUTH_URL" "$WORKDIR"
 fi
+
+# Scrub the token from the stored remote so it never persists in .git/config.
+git -C "$WORKDIR" remote set-url origin "$CLEAN_URL"
 
 # 2. Install dependencies.
 echo "==> Installing requirements."
