@@ -1,15 +1,17 @@
-# Part 1 — pure-neural baseline (highway-env + PPO/DQN).
-# Pinned loosely; Colab provides a recent torch/CUDA stack.
+# Base stack — installed by bash/setup_colab.sh for all three notebooks.
+# (MetaDrive is heavy and only needed for colab_3; install it there separately:
+#   pip install metadrive-simulator)
 
 highway-env>=1.8.2
 gymnasium>=0.29.1
 stable-baselines3>=2.3.0
-sb3-contrib>=2.3.0          # reserved for later (e.g. maskable PPO in Part 2)
+sb3-contrib>=2.3.0          # reserved (e.g. maskable PPO as a shield variant)
 torch>=2.1.0
-numpy>=1.24
+numpy>=1.24,<2.0           # legacy-gym (SB3 compat shim) is not NumPy-2.0 safe
 pyyaml>=6.0
-moviepy>=1.0.3             # video encoding for record_video()
+moviepy>=1.0.3            # video encoding for record_video()
 imageio>=2.31
 imageio-ffmpeg>=0.4.9
-tensorboard>=2.14          # optional: training curves
+pandas>=2.0              # metric tables in the notebooks
+tensorboard>=2.14
 tqdm>=4.66

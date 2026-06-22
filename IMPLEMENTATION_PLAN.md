@@ -9,6 +9,7 @@ through each as the engineering substrate.
 1. **Part 1 — Train one model *without* logical rules** (baseline + evaluation + study).
 2. **Part 2 — Apply the NeSy rules as a "fine-tune"** on the trained model.
 3. **Part 3 — The MetaDrive part** (realistic sim + velocity action for robotics).
+4. **Part 4 — Head-to-head capstone** (two agents racing in one scene: baseline vs NeSy).
 
 It reuses the conventions already fixed in [`README.md`](README.md), [`project.md`](project.md),
 and [`ARCHITECTURE_nesy-highway-driving.md`](ARCHITECTURE_nesy-highway-driving.md): function-only
@@ -311,7 +312,102 @@ the CBF rather than only enforced by discrete masking.
 
 ---
 
-## 4. Revised repository structure (labs included)
+# Part 4 — Head-to-head capstone (two agents racing)
+
+**Objective:** close the project with a single, intuitive demonstration of its whole thesis — put
+**two agents in the same scene and let them race**: each tries to overtake the background traffic
+and surpass the other, while we score not only *who finishes first* but *who stays safe and
+rule-compliant under competitive pressure*. This is the capstone for the exam discussion, and it is
+deliberately built to reuse Parts 1–3 rather than add new machinery.
+
+## 4.1 The framing that makes it meaningful
+
+The race is **not** two arbitrary cars. It is:
+
+- **Agent A — the pure-neural baseline** (the frozen Part-1 policy: optimises reward, knows no
+  traffic law), versus
+- **Agent B — the NeSy agent** (the Part-2 shielded + logic-fine-tuned policy; in MetaDrive, with
+  the CBF/VO safety filter).
+
+Both start from the same position, with the same background traffic and the same seed. The race then
+answers the project's central question in one picture: *does the rule-following agent overtake as
+fast — or faster — while crashing less and breaking fewer rules, even when the incentive is to drive
+aggressively to win?* The productive tension is explicit: a "be ahead" reward pushes toward
+aggression, the rules pull toward safety. Showing B wins-or-ties on progress **and** dominates on
+safety is the strongest result the project can present.
+
+## 4.2 Two tiers — implement the first, keep the second as a stretch
+
+- **Tier 1 — evaluation-time race (recommended, low risk).** Both agents are *already trained*
+  (single-agent, Parts 1–2/3). They are simply deployed together in one multi-agent env and the race
+  is scored. No joint training, no new RL algorithm. This reuses everything already built and is the
+  intended deliverable for Part 4.
+- **Tier 2 — competitive self-play (explicit stretch, higher risk).** Actually train the two against
+  each other (self-play / MARL via PettingZoo or RLlib) with a racing reward. This introduces
+  non-stationarity and substantial tuning and is a small research project in itself — listed as an
+  optional stretch, **not** a commitment.
+
+## 4.3 Where it runs
+
+- **MetaDrive (preferred).** Part 3 already moves to MetaDrive, which ships native multi-agent
+  (MARL) environments with a dict observation/action interface, so two controllable agents are
+  first-class. The race rides on the Part-3 velocity action and the CBF/VO safety stack.
+- **`highway-env` (lighter alternative).** Supports multiple controlled vehicles
+  (`controlled_vehicles > 1` with the multi-agent observation/action wrappers); each agent gets its
+  own local kinematic view and the other controlled car appears as a nearby vehicle. Good for a quick
+  version before the MetaDrive one.
+
+In both, each agent runs its **own** policy on its **own** local observation and outputs its **own**
+action — no shared weights required.
+
+## 4.4 Code surface (function-only, reuses existing modules)
+
+```
+eval/race.py    make_race_env(cfg, n_agents=2) -> env          # multi-agent env (highway-env or MetaDrive)
+                race(model_a, model_b, cfg, seeds) -> race_metrics
+                record_race_video(model_a, model_b, cfg, path)
+```
+
+`race()` steps the multi-agent env, feeding each agent its slice of the observation through the
+**same** `predicates()` / `safety_shield()` / CBF used elsewhere, and logs the per-agent outcome.
+
+## 4.5 What has to be defined (the honest engineering)
+
+- **Winner / finish condition.** `highway-env` has no finish line natively, so define the winner as
+  *most longitudinal progress in a fixed time budget* (or first past a virtual line); in MetaDrive use
+  the route's destination. Put the rule in the YAML.
+- **Agent–agent collisions.** Decide and log what happens when the two *controlled* cars touch (race
+  void / both penalised / safety-failure for whoever caused it) — distinct from hitting background
+  traffic.
+- **Fairness.** Identical start, identical traffic, identical seeds per race; swap which lane each
+  agent starts in across races to cancel any positional bias.
+- **Reward caveat (important).** A pure "be ahead of the other" reward incentivises unsafe,
+  rule-breaking driving. That is fine as a *finding* (it showcases the shield/CBF), but it means the
+  scorecard must always pair finishing position **with** safety/violation metrics — never report the
+  winner alone.
+
+## 4.6 Evaluation for Part 4
+
+Run *N* races (fixed seeds) and report, per agent:
+
+| Metric | Agent A (baseline) | Agent B (NeSy) |
+|---|---|---|
+| Win rate / finishing position | | |
+| Time-to-finish (or progress in budget) | | |
+| Overtakes of background traffic | | |
+| Crash rate (incl. agent–agent) | | |
+| Per-rule violation rate (independent MTL monitor) | | |
+| Shield / CBF intervention rate | — | |
+
+Plus a side-by-side **race video** — the single most legible artefact for the exam discussion.
+
+**Exit criterion for Part 4 (the capstone result):** in head-to-head racing, the NeSy agent
+finishes **as fast or faster** than the pure-neural baseline while recording **fewer crashes and
+provably fewer rule violations** — the project's whole thesis shown as a race.
+
+---
+
+## 5. Revised repository structure (labs included)
 
 ```
 nesy-highway-driving/
@@ -330,7 +426,8 @@ nesy-highway-driving/
 ├── agents/
 │   └── baselines.py                # train_ppo/dqn, load, finetune_logic_reward   [Lab 5 RL]
 ├── eval/
-│   └── evaluate.py                 # evaluate(), record_video()
+│   ├── evaluate.py                 # evaluate(), record_video()
+│   └── race.py                     # make_race_env(), race(), record_race_video()   [Part 4]
 ├── nesy/
 │   ├── ROADMAP.md                  # five-stage NeSy plan
 │   ├── RULES.md                    # rule → predicate → constraint/heuristic
@@ -349,13 +446,13 @@ by the shield, the predicate library, and the MetaDrive factory.
 
 ---
 
-## 5. Sequencing, risks, and definition of done
+## 6. Sequencing, risks, and definition of done
 
 **Order of work.** Part 1 fully (frozen checkpoints + study) → Part 2 Step A (predicates, grounded
 with **Lab 2/Lab 4** helpers) → Step B (FSM shield, **Lab 3**, zero-retrain) → Step C (reward
 fine-tune) → optional D/E → Part 3 (velocity action **Lab 1**, CBF **Lab 5**, VO **Lab 4**,
-intersections). Never start a layer before the previous exit criterion is met, or the A/B
-comparisons stop being fair.
+intersections) → Part 4 (head-to-head race, baseline vs NeSy). Never start a layer before the
+previous exit criterion is met, or the A/B comparisons stop being fair.
 
 **Key risks & mitigations.**
 
@@ -369,10 +466,14 @@ comparisons stop being fair.
   solves; validate by showing CBF and discrete shield agree on shared scenarios.
 - *MetaDrive continuous control is harder to train* → reuse PPO, short curriculum, keep VO + CBF as a
   safety net.
+- *Race reward rewards aggression (Part 4)* → never score finishing position alone; always pair it
+  with crash + violation metrics, and keep competitive self-play (Tier 2) as an optional stretch.
 
 **Definition of done.** A reproducible notebook that, from fixed seeds, produces: (1) the PPO/DQN
 baseline and study; (2) the four-config NeSy comparison table on `highway-env` showing equal-or-
 better overtaking with provably fewer violations; (3) the same pipeline on MetaDrive with a velocity
-action, a CBF safety filter, and intersection rules. Everything mirrored to Drive, every parameter in
-the YAML, every rule traceable to a formula in [`paper/`](paper/) and every safety mechanism
-traceable to a lab.
+action, a CBF safety filter, and intersection rules; and (4) a head-to-head **race** (baseline vs
+NeSy) with a per-agent scorecard and a side-by-side video showing the NeSy agent finishes as fast or
+faster while crashing and violating less. Everything mirrored to Drive, every parameter in the YAML,
+every rule traceable to a formula in [`paper/`](paper/) and every safety mechanism traceable to a
+lab.
