@@ -1,0 +1,123 @@
+# =============================================================================
+# Single source of truth for Part 1 (and a reserved block for Part 2).
+# Nothing is hard-coded in the .py modules — every quantity lives here.
+# Loaded once in the Colab notebook via utils.load_config().
+# =============================================================================
+
+# ---- Reproducibility ---------------------------------------------------------
+# Training seed is used to seed PPO/DQN and the env during training.
+# eval_seeds are HELD-OUT and identical for PPO and DQN so the comparison is fair.
+seed: 42
+eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
+
+# ---- Where results go (mirrored to Drive from the notebook) ------------------
+paths:
+  drive_root: /content/drive/MyDrive/nesy-highway-driving
+  checkpoints: checkpoints      # <drive_root>/checkpoints/{ppo,dqn}.zip
+  videos: videos                # <drive_root>/videos/{ppo,dqn}.mp4
+  metrics: metrics              # <drive_root>/metrics/*.json
+  tensorboard: tb               # <drive_root>/tb/
+
+# ---- Environment -------------------------------------------------------------
+# Two ids: `id` for training/eval, `fast_id` for quick smoke tests.
+env:
+  id: highway-v0
+  fast_id: highway-fast-v0
+  config:
+    # Observation: ego + N nearest vehicles, ego-relative, normalized -> fixed shape.
+    observation:
+      type: Kinematics
+      vehicles_count: 5
+      features: [presence, x, y, vx, vy]
+      absolute: false
+      normalize: true
+      order: sorted
+    # Action: discrete tactical meta-actions (the hinge for the Part-2 shield/FSM).
+    action:
+      type: DiscreteMetaAction
+    # Road / traffic.
+    lanes_count: 4
+    vehicles_count: 50
+    vehicles_density: 1.0
+    controlled_vehicles: 1
+    initial_lane_id: null
+    duration: 40                # seconds of simulated time per episode
+    # Time stepping.
+    policy_frequency: 1         # agent decisions per simulated second
+    simulation_frequency: 15
+    # Native reward (kept light; heavy shaping would confound the Part-2 comparison).
+    collision_reward: -1.0
+    right_lane_reward: 0.1
+    high_speed_reward: 0.4
+    lane_change_reward: 0.0
+    reward_speed_range: [20, 30]
+    normalize_reward: true
+    offroad_terminal: true      # end the episode on leaving the road
+    # Rendering (only used by record_video()).
+    render_agent: true
+    screen_width: 600
+    screen_height: 150
+    scaling: 5.5
+
+# ---- Light reward shaping (Part 1) ------------------------------------------
+# Deliberately minimal so "overtake safely" is expressible without confounding NeSy.
+# Applied by envs/highway_factory.RewardShapingWrapper when enabled.
+shaping:
+  enabled: true
+  overtake_bonus: 0.05          # per car passed this step
+  offroad_penalty: 0.10         # per step spent off-road
+
+# ---- PPO (recommended single best model) ------------------------------------
+ppo:
+  policy: MlpPolicy
+  total_timesteps: 200000
+  learning_rate: 0.0005
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.95
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  policy_kwargs:
+    net_arch: [256, 256]
+  verbose: 1
+
+# ---- DQN (second required baseline) -----------------------------------------
+dqn:
+  policy: MlpPolicy
+  total_timesteps: 200000
+  learning_rate: 0.0005
+  buffer_size: 50000
+  learning_starts: 1000
+  batch_size: 64
+  gamma: 0.95
+  train_freq: 4
+  gradient_steps: 1
+  target_update_interval: 1000
+  exploration_fraction: 0.2
+  exploration_final_eps: 0.05
+  policy_kwargs:
+    net_arch: [256, 256]
+  verbose: 1
+
+# ---- Evaluation --------------------------------------------------------------
+eval:
+  episodes_per_seed: 5          # episodes per held-out seed
+  deterministic: true           # greedy action at eval time
+  video_episodes: 1             # episodes captured per recorded video
+
+# ---- RESERVED for Part 2 (NeSy) — read by nesy/, ignored in Part 1 ----------
+# Parameters traceable to the temporal-logic papers (see nesy/RULES.md).
+rules:
+  enabled: false
+  t_c: 1.0          # comfortable reaction/anticipation time [s]   (RG1)
+  a_min: -3.0       # max comfortable deceleration [m/s^2]         (RG2)
+  v_max: 30.0       # speed limit [m/s]                            (RG3)
+  v_min: 20.0       # min flow speed [m/s]                         (RG4)
+  d_near: 10.0      # "near" longitudinal threshold [m]
+  lambda_RI2: 0.0   # passing-on-right penalty weight (soft)
+  lambda_RG4: 0.0   # impede-flow penalty weight (soft)
+  lambda_RG2: 0.0   # abrupt-braking penalty weight (soft)

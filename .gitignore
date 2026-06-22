@@ -1,1 +1,14 @@
 /private
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Local training artifacts (results live on Drive)
+checkpoints/
+videos/
+metrics/
+tb/
+*.zip
+*.mp4
