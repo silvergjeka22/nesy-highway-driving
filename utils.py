@@ -13,6 +13,30 @@ import numpy as np
 import yaml
 
 
+def silence_warnings():
+    """Mute the noisy (harmless) deprecation/legacy-gym warnings on Colab.
+
+    Call this BEFORE importing stable-baselines3 / highway-env / pygame so the
+    filters are active when those packages emit their import-time warnings:
+
+      * "Gym has been unmaintained since 2022…" — SB3's internal legacy-``gym``
+        compat import (we use Gymnasium; the shim import is harmless).
+      * ``pkg_resources`` / ``declare_namespace`` — pygame + google.colab.
+      * ``datetime.utcnow()`` — Jupyter kernel internals.
+
+    These are warnings, not errors; this only quiets the output.
+    """
+    import warnings
+    import logging
+
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", message=r".*Gym has been unmaintained.*")
+    warnings.filterwarnings("ignore", message=r".*pkg_resources.*")
+    warnings.filterwarnings("ignore", message=r".*declare_namespace.*")
+    logging.getLogger("gym").setLevel(logging.ERROR)
+
+
 def load_config(path):
     """Load the single project YAML into a plain dict.
 

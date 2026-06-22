@@ -14,11 +14,16 @@ YAML; the only Part-1 additions are two thin wrappers:
 No top-level execution — the notebook calls ``make_env``.
 """
 
-import gymnasium as gym
-import numpy as np
+# Mute pygame/pkg_resources/legacy-gym warnings before the heavy imports run.
+from utils import silence_warnings
+
+silence_warnings()
+
+import gymnasium as gym  # noqa: E402
+import numpy as np  # noqa: E402
 
 # highway_env must be imported so its envs register with gymnasium.
-import highway_env  # noqa: F401
+import highway_env  # noqa: F401,E402
 
 
 def make_env(cfg, render=False, seed=None, fast=False):

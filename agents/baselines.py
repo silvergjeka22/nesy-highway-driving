@@ -8,10 +8,14 @@ saved checkpoint for evaluation.
 No top-level execution — the Colab notebook orchestrates these calls.
 """
 
-from stable_baselines3 import PPO, DQN
+# Mute legacy-gym / pkg_resources warnings before SB3 imports its compat shim.
+from utils import silence_warnings, set_global_seeds, drive_path
 
-from utils import set_global_seeds, drive_path
-from envs.highway_factory import make_env
+silence_warnings()
+
+from stable_baselines3 import PPO, DQN  # noqa: E402
+
+from envs.highway_factory import make_env  # noqa: E402
 
 # Algorithm registry so callers can stay generic (load_model, eval harness).
 _ALGOS = {"ppo": PPO, "dqn": DQN}
