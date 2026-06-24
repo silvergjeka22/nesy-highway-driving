@@ -1,113 +1,107 @@
 # Implementation Plan — `nesy-highway-driving`
 
-A single, end-to-end plan for the project: train a **pure-neural driving baseline**, then add
-**Neuro-Symbolic (NeSy) traffic rules** as a fine-tuning / correction layer, then **port to
-MetaDrive** for a realistic, robotics-ready setting — now explicitly built on the **course lab
-toolkit** (Labs 1–5). The plan is organised into the three parts requested, with the labs woven
-through each as the engineering substrate.
+A single, end-to-end plan organised as **four Colab notebooks**, one per part. Each notebook follows
+the **same structure and conventions** (function-only `.py` modules imported by the notebook, one
+config YAML, clone-from-GitHub + mount Drive, fixed seeds), and **each part ends by saving an `.mp4`
+to Google Drive** that shows how the model(s) perform — the visual result for the report and the exam
+discussion.
 
-1. **Part 1 — Train one model *without* logical rules** (baseline + evaluation + study).
-2. **Part 2 — Apply the NeSy rules as a "fine-tune"** on the trained model.
-3. **Part 3 — The MetaDrive part** (realistic sim + velocity action for robotics).
-4. **Part 4 — Head-to-head capstone** (two agents racing in one scene: baseline vs NeSy).
+| Notebook | Part | What it does | Saved to Drive at the end |
+|---|---|---|---|
+| `colab_1_baseline.ipynb` | **Part 1** | Study the environment, train **PPO vs DQN**, evaluate, pick the **best** model | best checkpoint **+ `part1_best.mp4`** |
+| `colab_2_nesy.ipynb` | **Part 2** | Load the best model, **fine-tune it with NeSy + labs** | NeSy checkpoint **+ `part2_nesy.mp4`** |
+| `colab_3_metadrive.ipynb` | **Part 3** | Port to **MetaDrive** (velocity action, CBF/VO, intersections) | MetaDrive checkpoint **+ `part3_metadrive.mp4`** |
+| `colab_4_race.ipynb` | **Part 4** | **Race** the NeSy agent vs the no-NeSy baseline | race result **+ `part4_race.mp4`** |
 
-It reuses the conventions already fixed in [`README.md`](README.md), [`project.md`](project.md),
-and [`ARCHITECTURE_nesy-highway-driving.md`](ARCHITECTURE_nesy-highway-driving.md): function-only
-`.py` modules, one config YAML, training on Colab, results mirrored to Drive, fixed seeds for fair
-comparison. No code here — just *what* to build and *why*, in the order to build it.
+This plan reuses the conventions in [`README.md`](README.md), [`project.md`](project.md), and
+[`ARCHITECTURE_nesy-highway-driving.md`](ARCHITECTURE_nesy-highway-driving.md). No code here — just
+*what* each notebook builds and *why*, in build order.
 
-> **Note on the labs.** The lab PDFs themselves were not available when this plan was written; the
-> integration below is derived from the lab titles (Lab 1 — intro + camera follow; Lab 2 — obstacle
-> avoidance with LIDAR; Lab 3 — FSM planning; Lab 4 — MCTS + velocity obstacles; Lab 5 — RL + CBF)
-> and the standard content those topics carry in a robotics course. If the lab handouts/code are
-> shared, the relevant sections can be tightened to match their exact APIs and parameters.
+> **Note on the labs.** The lab PDFs were not available when this plan was written; the integration
+> is derived from the lab titles (Lab 1 — intro + camera follow; Lab 2 — obstacle avoidance with
+> LIDAR; Lab 3 — FSM planning; Lab 4 — MCTS + velocity obstacles; Lab 5 — RL + CBF) and the standard
+> content those topics carry. If the lab handouts/code are shared, the lab sections can be tightened.
 
 ---
 
-## 0. The story in one paragraph
+## 0. Conventions shared by all four notebooks
 
-We first establish a clean, reproducible **model-free RL baseline** that learns to overtake traffic
-on a highway using discrete tactical meta-actions (`LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER`).
-That baseline knows nothing about traffic law — it only optimises reward (this is **Lab 5's RL**
-half). We then inject the **temporal-logic traffic rules** (Maierhofer et al., TU Munich / fortiss)
-in two complementary ways: a **hard safety layer** — realised as a manoeuvre **shield** and, in the
-continuous setting, as **Control Barrier Functions (Lab 5)** and **velocity obstacles (Lab 4)** —
-and a **logic-shaped reward fine-tune** for the soft rules. The behavioural glue that decides
-*which* manoeuvre to consider is a **finite-state machine (Lab 3)**; the safety substrate that keeps
-the robot from hitting anything reactively is **LIDAR avoidance (Lab 2)**; and the whole thing runs
-on a robot driven by velocity commands through **`cmd_vel`, set up in Lab 1**. Finally we migrate to
-**MetaDrive**, switching the action interface to **velocity (linear + angular)** so the symbolic
-vocabulary maps onto a real robot and intersection rules come online. The headline target across all
-three parts: **equal-or-better overtaking with provably fewer rule violations than the pure-neural
-baseline.**
+- **Function-only `.py` files.** No top-level execution; the notebook imports functions and drives
+  everything. Same contract as the architecture doc.
+- **One config YAML** (`configs/highway.yaml`) holds every parameter — env, PPO, DQN, the `rules:`
+  block (paper parameters `t_c`, `a_min`, `v_max`, `d_near`, …), the `metadrive:` block, the `cbf:`
+  block, and the `race:` block. Nothing hard-coded.
+- **Colab workflow (identical in every notebook):** mount Google Drive → run `bash/setup_colab.sh`
+  (clone/`git pull` the repo + `pip install -r requirements.txt` + create Drive folders) → import the
+  project functions → run → **mirror checkpoints, metrics, and the `.mp4` to Drive.**
+- **Drive layout:**
+  `/content/drive/MyDrive/nesy-highway-driving/{checkpoints,metrics,videos}/`. The `videos/` folder
+  collects `part1_best.mp4`, `part2_nesy.mp4`, `part3_metadrive.mp4`, `part4_race.mp4`.
+- **Fixed seeds**, identical eval seeds across algorithms and parts, so every comparison is fair.
+- **Reproducibility of the chain:** Part 2 loads Part 1's best checkpoint from Drive; Part 3 starts
+  from Part 2; Part 4 races Part 1's baseline against Part 2/3's NeSy agent. The Drive checkpoints are
+  the hand-off between notebooks.
 
-The source rules come from the two papers in [`paper/`](paper/):
+### Where the labs are used (the toolbox)
+
+| Lab | Topic | Role | First used in |
+|---|---|---|---|
+| **Lab 1** | Intro + camera follow | `cmd_vel` / velocity interface; perception→control loop | Part 3 |
+| **Lab 2** | Obstacle avoidance with LIDAR | reactive safety floor; range→predicate grounding | Part 2 |
+| **Lab 3** | FSM planning | finite-state-machine behaviour layer that hosts the safety shield | Part 2 |
+| **Lab 4** | MCTS + velocity obstacles | VO/RVO safe-gap grounding; optional manoeuvre search | Part 2 / Part 3 |
+| **Lab 5** | RL + CBF | the RL learner (Part 1) + Control Barrier Function safety filter (Part 3) | Part 1 / Part 3 |
+
+### The source rules (papers in [`paper/`](paper/))
 
 - **Interstate rules** — *IEEE IV 2020*: safe distance `RG1`, no unnecessary braking `RG2`, speed
   limit `RG3`, preserve flow `RG4`, no stopping `RI1`, no passing on the right `RI2`, no
-  U-turn/reverse `RI3`, emergency-lane `RI4`. → maps onto `highway-env`.
+  U-turn/reverse `RI3`, emergency-lane `RI4`. → `highway-env` (Parts 1–2, 4).
 - **Intersection rules** — *IEEE IV 2022*: stop signs, traffic lights, right-before-left, priority,
-  left-turn yielding. → reserved for **Part 3 (MetaDrive)**.
+  left-turn yielding. → MetaDrive (Part 3).
 
 Safety rules become **hard constraints** (shield / CBF / VO); comfort-efficiency rules become **soft
-heuristics** (reward), matching the papers' own finding (safety rules ≈100% human compliance,
-comfort rules violated 20–35%).
+heuristics** (reward), matching the papers' finding (safety ≈100% human compliance; comfort violated
+20–35%).
 
 ---
 
-## 0.1 How the labs map onto the project (read this first)
+# Part 1 — Baseline: compare the two algorithms, save the best model
 
-The five labs are not a side track — they are the **toolbox** each part is built from. This mapping
-is the spine of the whole plan.
+**Notebook:** `colab_1_baseline.ipynb` — **must be the complete, self-explanatory notebook**: it
+studies and explains the environment, then trains and compares the two algorithms, then saves the
+**best** model and a performance `.mp4` to Drive. This is the entry point a reader opens first.
 
-| Lab | Topic | Role in this project | Used in |
-|---|---|---|---|
-| **Lab 1** | Intro + camera follow | ROS substrate; perception→control loop; the `cmd_vel` (velocity) interface every later stage actuates through; a minimal "follow a target" controller to sanity-check the stack. | Part 3 (robotics base), and the action-interface design throughout. |
-| **Lab 2** | Obstacle avoidance with LIDAR | Reactive last-resort safety; the lidar observation MetaDrive exposes; grounds the `off_road` / `too_close` predicates from raw range data. | Part 2 (predicates), Part 3 (observation + reactive safety net). |
-| **Lab 3** | FSM planning | The **symbolic manoeuvre layer**: a finite-state machine over high-level states (`CRUISE`, `FOLLOW`, `OVERTAKE-LEFT`, `MERGE`, `EMERGENCY-STOP`) that is the natural home for the temporal-logic rules and the shield's fallbacks. | Part 2 (shield structure), Part 3 (behaviour layer). |
-| **Lab 4** | MCTS + velocity obstacles | **Velocity Obstacles / RVO** give the continuous, geometric version of "is this gap safe?" — directly grounding `safe_gap(left/right)` and `keeps_safe_distance`. MCTS is an optional symbolic planner that can search manoeuvre sequences the shield then validates. | Part 2 (safe-gap predicates), Part 3 (continuous safe-gap + optional planner). |
-| **Lab 5** | RL + CBF | **RL** is the Part-1 baseline learner. **Control Barrier Functions** are the continuous-control analog of the discrete safety shield — a provably-safe filter on the velocity command. This is the bridge that lets the same safety guarantees survive the move from discrete meta-actions to `cmd_vel`. | Part 1 (RL baseline), Part 2 (shield ↔ CBF correspondence), Part 3 (CBF on `cmd_vel`). |
+## 1.1 Notebook contents (in order)
 
-The key conceptual through-line: **a hard traffic rule has one meaning expressed three ways** — as an
-MTL formula (the papers), as a discrete **manoeuvre shield** (`highway-env`, Part 2), and as a
-**CBF / velocity-obstacle constraint** on the velocity command (MetaDrive / robot, Lab 4 + Lab 5,
-Part 3). Building all three and showing they agree is the project's strongest result.
+1. **Setup.** Mount Drive, run `setup_colab.sh`, load `configs/highway.yaml`.
+2. **Study & explain the environment** (this is required — the notebook teaches the environment):
+   - what `highway-env` is, the `highway-v0` scenario, and why discrete tactical actions were chosen;
+   - the **action space** `LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER` and what the low-level
+     controller does;
+   - the **observation** (`Kinematics`: ego + N nearest vehicles, ego-relative, normalised, fixed
+     `vehicles_count`), shown with a rendered frame and a printed example observation;
+   - the **reward** (native speed/lane-keeping − collision, plus the light overtake/off-road shaping)
+     written out explicitly;
+   - a short **random-policy rollout** + rendered clip so the reader sees the task before any learning.
+3. **Train both baselines** on the same env/seeds:
 
----
+   | Algorithm | Type | Why |
+   |---|---|---|
+   | **PPO** | On-policy policy-gradient | Recommended best; on-policy avoids replaying stale noisy multi-agent transitions; clipped objective tolerates shaping; clean credit assignment for multi-step overtakes. |
+   | **DQN** | Off-policy value-based | Second baseline; more sample-efficient on discrete actions but more brittle in noisy traffic. |
 
-# Part 1 — Train one model *without* logical rules
+   (This is the **RL half of Lab 5**, before any safety is added.)
+4. **Evaluate both** on the same held-out seeds and **compare**: crash rate, on-road/off-road %,
+   overtakes per episode, return, episode length, plus training curves — reported mean ± std, side by
+   side.
+5. **Pick the best model** by a stated rule (default: lowest crash rate among models within X% of the
+   top return — safety-first; the rule lives in the YAML so it is explicit, not arbitrary).
+6. **Save to Drive:** the **best checkpoint** → `checkpoints/part1_best_{ppo|dqn}.zip`, the metrics
+   table, the training curves, **and `videos/part1_best.mp4`** — a recorded rollout of the best model
+   driving/overtaking.
 
-**Objective:** a transparent, reproducible neural baseline plus an honest evaluation/study. No
-symbolic knowledge of any kind. This is the control group every later number is measured against.
-This part exercises the **RL half of Lab 5** and reuses the **camera/perception-to-control framing
-of Lab 1** as the conceptual shape of the agent (observe → decide → actuate).
-
-## 1.1 Environment
-
-- **Simulator:** `highway-env` (`highway-v0`; `highway-fast-v0` for quick iteration).
-- **Action space:** `DiscreteMetaAction` — `LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER`. The
-  low-level controller handles steering/throttle; the agent only chooses the manoeuvre. This is the
-  deliberate hinge for Part 2 — rules and the **Lab 3 FSM** are written over manoeuvres, not torque.
-- **Observation:** `Kinematics` — ego + the *N* nearest vehicles as `[presence, x, y, vx, vy]`,
-  ego-relative, `normalize: true`, fixed `vehicles_count` so the tensor shape is constant.
-- **Reward:** the simulator's native reward (speed/progress + lane-keeping − collision) plus a small
-  shaping term so "overtake safely" is expressible: a bonus per car passed, a penalty for leaving
-  the road. Keep shaping light — heavy shaping confounds the later NeSy comparison.
-
-All quantities live in `configs/highway.yaml` (env block, PPO block, DQN block, and a pre-reserved
-`rules:` block for Part 2). Nothing hard-coded.
-
-## 1.2 Algorithms — two standard baselines, PPO recommended
-
-| Algorithm | Type | Why it's here |
-|---|---|---|
-| **PPO** | On-policy policy-gradient | Recommended best model. On-policy → no replay of stale, noisy multi-agent transitions; clipped objective tolerates reward shaping; advantage estimation gives clean credit assignment for the multi-step overtake. |
-| **DQN** | Off-policy value-based | Second required baseline. More sample-efficient on discrete actions, but more brittle in noisy traffic (value overestimation). Kept for a fair contrast. |
-
-Both use the same observation, env config, and eval seeds. (This is the **Lab 5 RL** content applied
-to driving, before any CBF safety is added.)
-
-## 1.3 Code surface (function-only)
+## 1.2 Code surface (function-only)
 
 ```
 envs/highway_factory.py   make_env(cfg, render=False) -> env
@@ -115,365 +109,217 @@ agents/baselines.py       train_ppo(cfg, drive_dir) -> model
                           train_dqn(cfg, drive_dir) -> model
                           load_model(path, algo) -> model
 eval/evaluate.py          evaluate(model, cfg, seeds) -> metrics
-                          record_video(model, cfg, path)
+                          select_best(metrics_ppo, metrics_dqn, cfg) -> (best_model, tag)
+                          record_video(model, cfg, path)        # writes the .mp4
 ```
 
-The Colab notebook mounts Drive, runs `bash/setup_colab.sh` (clone + pip install + Drive folders),
-loads the YAML, calls `train_ppo`/`train_dqn`, then `evaluate` + `record_video`; everything mirrors
-to Drive.
+## 1.3 Exit criterion
 
-## 1.4 Evaluation — metrics
-
-Over a fixed set of held-out seeds (identical for PPO and DQN): **crash rate**, **on-road/off-road
-%**, **overtakes** per episode, **return**, **episode length**, and **training curves**. Report PPO
-vs. DQN side by side, mean ± std over seeds.
-
-## 1.5 The "study" deliverable for Part 1
-
-1. Does PPO beat DQN here, and on which axis (safety vs. throughput)?
-2. What does the baseline get *wrong*? Catalogue failure modes — cutting in with too small a gap,
-   passing on the right, tail-gating, braking abruptly. **These failures motivate Part 2** and are a
-   free preview of the per-rule violation rate Part 2 measures properly.
-3. Sensitivity to shaping weights and `vehicles_count`.
-
-**Exit criterion:** frozen PPO + DQN checkpoints, a metrics table, training curves, two eval videos,
-and a one-page study — all reproducible from the notebook with fixed seeds.
+A frozen **best** checkpoint on Drive, the PPO-vs-DQN comparison table + curves, a documented
+selection rule, and **`part1_best.mp4` saved to Drive**. Part 2 will load exactly this checkpoint.
 
 ---
 
-# Part 2 — Apply the NeSy rules as a "fine-tune"
+# Part 2 — Fine-tune the best model with NeSy + labs
 
-**Objective:** take the frozen Part-1 policy and make it obey the temporal-logic traffic rules
-*without* discarding the baseline. "Fine-tune" has layers of increasing intrusiveness: a
-**zero-retraining shield** (constraints), then a **reward fine-tune** (heuristics), then optional
-deeper NeSy. The shield is structured as an **FSM (Lab 3)**; its safe-gap tests come from **velocity
-obstacles (Lab 4)**; its reactive floor is **LIDAR avoidance (Lab 2)**; and its continuous-control
-twin is a **CBF (Lab 5)**, which makes the discrete guarantee transfer to `cmd_vel` in Part 3.
+**Notebook:** `colab_2_nesy.ipynb` — loads the **best Part-1 checkpoint from Drive** and makes it obey
+the temporal-logic traffic rules, using the NeSy layer and the labs. It is also the **initialisation
+for Part 3** (the predicates, FSM shield, and reward wrapper built here are reused there).
 
-## 2.1 Step A — Symbolic predicates (perception → logic)
+## 2.1 Notebook contents (in order)
 
-Ground the observation into truth-valued (later fuzzy) predicates the rules are written over.
+1. **Setup** + load `part1_best` from Drive.
+2. **Step A — Predicates (perception → logic).** Ground the observation into truth-valued (later
+   fuzzy) predicates the rules are written over: `keeps_safe_distance(front)`, `safe_gap(left/right)`,
+   `too_close`/`off_road`, `unnecessary_braking`, `over_speed_limit`/`speed_below_min`,
+   `impedes_flow`, `must_not_stop`, `passing_on_right`. Safe-gap predicates are grounded with
+   **velocity obstacles (Lab 4)**; proximity/off-road with **LIDAR helpers (Lab 2)**. Parameters from
+   the YAML `rules:` block, traceable to the papers.
+3. **Step B — Safety shield as an FSM (Lab 3), zero retraining.** Wrap the frozen best model in a
+   finite-state machine (`CRUISE`, `FOLLOW`, `OVERTAKE-LEFT`, `MERGE`, `EMERGENCY-STOP`); if the
+   proposed manoeuvre violates a **hard constraint** (`RG1` safe distance/gap, `RG3` speed limit,
+   `RI1` no stopping, stay-on-road), replace it with the safest legal fallback. Immediate safety gain,
+   clean on/off ablation, no training.
+4. **Step C — Logic-shaped reward fine-tune (the actual fine-tune).** Warm-start from the best
+   checkpoint and **continue training** on the reward augmented with **soft-heuristic** penalties
+   (`RI2` passing on the right, `RG4` impeding flow, `RG2` abrupt braking, accelerating while being
+   overtaken). Lower LR, fewer steps. Penalty weights `λ_i` in the YAML.
+5. **(Optional, stretch) Step D/E** — differentiable logic (fuzzy t-norms / LTN) and an independent
+   MTL runtime monitor for *provable* violation counting.
+6. **Evaluate vs. the baseline** on the same seeds, adding a **per-rule violation rate** measured by
+   the independent monitor (not the reward the agent sees). Four configs: baseline, +shield,
+   +logic-reward, +shield+reward.
+7. **Save to Drive:** the NeSy checkpoint → `checkpoints/part2_nesy.zip`, the comparison table, **and
+   `videos/part2_nesy.mp4`** — the fine-tuned agent driving, with the shield's interventions visible.
 
-```
-nesy/roadmap.py   predicates(obs, cfg) -> dict[str, bool|float]
-```
-
-| Predicate | Meaning | Source rule | Grounded via |
-|---|---|---|---|
-| `keeps_safe_distance(front)` | gap to leader ≥ legal safe distance | `RG1` | kinematics / **VO (Lab 4)** |
-| `safe_gap(left)` / `safe_gap(right)` | target-lane gap safe for a lane change | `RG1` lane-change | **velocity obstacles (Lab 4)** |
-| `too_close` / `off_road` | imminent collision / leaving lanes | road geom / `RI4` | **LIDAR ranges (Lab 2)** |
-| `unnecessary_braking` | braking harder than allowed without cause | `RG2` | ego accel |
-| `speed_below_min` / `over_speed_limit` | speed outside the legal band | `RG3` | ego speed vs. `v_max` |
-| `impedes_flow` | ego fails to preserve flow behind slow leader | `RG4` | relative speed |
-| `must_not_stop` / `in_standstill` | stopping where forbidden | `RI1` | ego speed |
-| `passing_on_right` / `faster_than_left` | overtaking on the right outside exceptions | `RI2` | lateral + relative speed |
-
-`predicates()` is pure (obs → dict), unit-testable, and reused unchanged in Part 3. Parameters
-(`t_c`, `a_min`, `v_max`, `d_near`, …) come from the YAML `rules:` block, traceable to the papers.
-
-## 2.2 Step B — Safety shield as an FSM (hard constraints, do this first, zero retraining)
-
-Wrap the frozen Part-1 policy in a **finite-state machine (Lab 3)**. States such as `CRUISE`,
-`FOLLOW`, `OVERTAKE-LEFT`, `MERGE`, `EMERGENCY-STOP` define which manoeuvres are admissible; the
-policy proposes a manoeuvre, the FSM + predicates check the hard constraints, and any violation is
-replaced with the safest legal fallback (`IDLE`/`SLOWER`, or refuse the lane change → drop back to
-`FOLLOW`/`EMERGENCY-STOP`).
+## 2.2 Code surface (function-only)
 
 ```
-nesy/roadmap.py   safety_shield(action, preds, fsm_state, cfg) -> (safe_action, fsm_state)
-```
-
-Hard constraints (humans almost never break — bound *safety*):
-
-- **`RG1` safe distance / safe gap** — block lane changes into an unsafe **velocity-obstacle (Lab 4)**
-  gap; block `FASTER` when the leader gap is unsafe.
-- **`RG3` speed limit** — block `FASTER` above `v_max`.
-- **`RI1` no stopping** — block manoeuvres that would force a standstill where forbidden.
-- **Stay on road / don't hit anything** — block off-road manoeuvres; **LIDAR (Lab 2)** is the
-  reactive floor that triggers `EMERGENCY-STOP` regardless of the policy.
-
-Why first: **no retraining**, an **immediate safety gain**, and a **clean on/off ablation** (shielded
-vs. unshielded, same checkpoint, same seeds). Crash rate and `RG1`/`RG3`/`RI1` violations should drop
-to ~0 with overtaking throughput largely intact.
-
-## 2.3 Step C — Logic-shaped reward (soft heuristics, the actual "fine-tune")
-
-Turn the **heuristic** rules into reward penalties and *continue training* the Part-1 policy on the
-augmented reward (warm-start, lower LR, fewer steps — the genuine fine-tune). The policy *learns*
-compliance instead of being corrected after the fact.
-
-Soft heuristics: `RI2` (passing on the right / faster than left, outside queue/congestion
-exceptions), `RG4` (impeding flow), `RG2` (abrupt braking), and accelerating while being overtaken.
-
-```
-envs/highway_factory.py   reward wrapper adds  − Σ λ_i · violation_i(preds)   from cfg.rules
+nesy/roadmap.py           predicates(obs, cfg) -> dict
+                          safety_shield(action, preds, fsm_state, cfg) -> (safe_action, fsm_state)
+labs/lab2_lidar_avoidance.py   range helpers -> too_close/off_road
+labs/lab3_fsm.py               fsm_step(state, preds, cfg) -> state
+labs/lab4_velocity_obstacles.py  safe_gap(...) -> bool/float
 agents/baselines.py       finetune_logic_reward(model, cfg, drive_dir) -> model
+eval/evaluate.py          evaluate(model, cfg, seeds) -> metrics   # + record_video(...) -> .mp4
 ```
 
-Penalty weights `λ_i` live in the YAML; ablate them to plot the throughput ↔ compliance trade-off.
+## 2.3 Exit criterion
 
-## 2.4 Steps D & E — optional deeper NeSy (stretch)
-
-- **D. Differentiable logic.** Replace hard masking with a differentiable logic module (fuzzy /
-  Łukasiewicz t-norms, or a small Logic Tensor Network) so predicates become a smooth gradient signal
-  trained jointly with the policy. (`predicates()` already returns floats where natural.)
-- **E. Symbolic distillation / explanation.** Distil the policy into a small human-readable rule set
-  over the predicates, and run an **independent MTL runtime monitor** built straight from `RG1`–`RI4`
-  to audit every episode — this is what turns "fewer violations" into "*provably* fewer violations".
-
-## 2.5 Evaluation for Part 2
-
-Re-run the Part-1 harness on the same seeds and **add a per-rule violation rate**, counted by the
-independent monitor (not by the shield/reward the agent sees — otherwise it is circular). Compare:
-
-| Config | Crash | On-road % | Overtakes | Return | `RG1` | `RG3` | `RI1` | `RI2` | `RG4` |
-|---|---|---|---|---|---|---|---|---|---|
-| Baseline (Part 1) | | | | | | | | | |
-| + FSM shield (B) | | | | | | | | | |
-| + Logic reward (C) | | | | | | | | | |
-| + Shield + reward | | | | | | | | | |
-
-**Exit criterion (headline result):** the shielded + fine-tuned policy achieves **equal-or-better
-overtaking with provably fewer rule violations** than the pure-neural baseline.
+A NeSy checkpoint on Drive, the four-config comparison (equal-or-better overtaking with provably
+fewer violations than baseline), **`part2_nesy.mp4` saved to Drive**, and the predicate/shield/reward
+modules ready to be imported by Part 3.
 
 ---
 
-# Part 3 — The MetaDrive part (and the robotics bridge)
+# Part 3 — MetaDrive (realistic sim + velocity action)
 
-**Objective:** move the validated pipeline to **MetaDrive** — more realistic, and the gateway to
-**robotics** — reusing everything from Parts 1–2 and changing only simulator-specific pieces. This is
-where the labs pay off most: the **velocity action** is the **Lab 1 `cmd_vel`** interface, the
-**CBF (Lab 5)** becomes the continuous safety filter, **velocity obstacles (Lab 4)** ground safe
-gaps from continuous geometry, and **LIDAR (Lab 2)** is the native MetaDrive observation.
+**Notebook:** `colab_3_metadrive.ipynb` — ports the validated NeSy pipeline to **MetaDrive**, the
+more realistic and robotics-ready simulator, reusing Part 2's modules and changing only the
+simulator-specific pieces.
 
-## 3.1 What changes (three things) and what stays
+## 3.1 Notebook contents (in order)
 
-### 3.1.1 Action interface — velocity (linear + angular), for the robot (Lab 1)
+1. **Setup** + load the Part-2 NeSy checkpoint/modules from Drive.
+2. **Velocity action (Lab 1).** `make_env_md(cfg)` exposes a continuous **`(v, ω)`** action (linear +
+   angular), mapping directly to a robot's `cmd_vel` (`geometry_msgs/Twist`: `linear.x=v`,
+   `angular.z=ω`). The discrete meta-actions stay as the **symbolic vocabulary** — the FSM shield
+   still reasons over manoeuvres and a thin layer translates them to `(v, ω)`.
+3. **Continuous safety (Labs 4 & 5).** A **Control Barrier Function** filter projects the policy's
+   desired `(v, ω)` to the nearest safe command (`h(x) ≥ 0`: safe distance, on-road) — the continuous
+   twin of the discrete shield; **velocity obstacles (Lab 4)** and **LIDAR (Lab 2)** as fallback
+   layers.
+4. **Observation adapter.** Feed MetaDrive's kinematics + LIDAR into the **same** `predicates()`.
+5. **Intersection rules (2022 paper).** Add stop signs, traffic lights, right-before-left, priority,
+   left-turn yielding as new predicates + FSM states (`STOP-SIGN-WAIT`, `YIELD`, `LIGHT-STOP`).
+6. **Train / fine-tune** (PPO over a continuous head) and **evaluate** with the same metrics + a
+   CBF-intervention rate + a check that CBF and discrete shield agree.
+7. **Save to Drive:** the MetaDrive checkpoint → `checkpoints/part3_metadrive.zip`, metrics, **and
+   `videos/part3_metadrive.mp4`** — the agent driving in MetaDrive (incl. an intersection).
 
-Set the MetaDrive action to **velocity: linear `v` + angular `ω`** rather than discrete meta-actions,
-because a real robot is driven via `cmd_vel`, which expects velocity commands.
+## 3.2 What stays vs. changes
 
-```
-envs/metadrive_factory.py   make_env_md(cfg) -> env        # continuous (v, ω) action
-```
+Reused: function-only contract, the YAML, PPO/DQN, the Part-2 predicates/shield/logic-reward, the
+metrics + independent monitor. Changed: `envs/metadrive_factory.py`, the manoeuvre→`(v,ω)` mapping,
+the CBF/VO filter, the observation adapter, the intersection rules.
 
-`(v, ω)` maps directly to ROS `geometry_msgs/Twist` (`linear.x = v`, `angular.z = ω`) — exactly the
-interface set up in **Lab 1's camera-follow** controller. The **discrete meta-actions remain the
-symbolic vocabulary**: the **FSM shield (Lab 3)** still reasons over manoeuvres, and a thin layer
-translates the chosen manoeuvre into a `(v, ω)` setpoint, so all of Part 2's symbolic logic is
-preserved; only the actuator changes.
+## 3.3 Exit criterion
 
-### 3.1.2 Safety on continuous control — CBF + velocity obstacles (Labs 4 & 5)
-
-On `cmd_vel` the discrete shield's guarantee is re-expressed continuously:
-
-- **Control Barrier Function (Lab 5)** — a safety filter that takes the policy's desired `(v, ω)` and
-  projects it to the nearest command that keeps a safety function `h(x) ≥ 0` (safe distance, on-road).
-  This is the continuous twin of the discrete shield; showing the two agree on the same scenario is
-  the project's cleanest "one rule, three encodings" demonstration.
-- **Velocity Obstacles / RVO (Lab 4)** — the geometric admissible-velocity set used both to ground
-  `safe_gap` and as a fallback collision-avoidance layer when the CBF's model is too coarse.
-- **LIDAR reactive avoidance (Lab 2)** — the last-resort floor, straight from raw ranges.
-
-### 3.1.3 New rules — intersections (the 2022 paper)
-
-MetaDrive has intersections, so the **intersection rules** (stop signs, traffic lights,
-right-before-left, priority, left-turn yielding) come online, added to `nesy/RULES.md` as new
-predicates + constraints/heuristics and handled by the *same* FSM-shield-then-reward machinery. New
-FSM states appear here (`STOP-SIGN-WAIT`, `YIELD`, `LIGHT-STOP`).
-
-### 3.1.4 What stays the same
-
-Function-only contract; single config YAML; PPO/DQN training (PPO now over a continuous head);
-Part-2 predicate library, shield, and logic-shaped reward; the evaluation metrics + independent MTL
-monitor; the five-stage NeSy roadmap.
-
-## 3.2 Migration steps
-
-1. `make_env_md(cfg)` with a continuous `(v, ω)` action and a `metadrive:` config block.
-2. **Manoeuvre → `(v, ω)`** translation so the FSM shield drives the continuous actuator (and a
-   robot's `cmd_vel`).
-3. A **CBF safety filter (Lab 5)** + **VO layer (Lab 4)** on the velocity command.
-4. A MetaDrive **observation adapter** (kinematics + **LIDAR, Lab 2**) feeding the existing
-   `predicates()`.
-5. Re-train PPO/DQN; re-apply shield + CBF + logic-reward fine-tune.
-6. Add **intersection** predicates/rules and extend the violation-rate evaluation.
-7. (Robotics stretch) bridge the velocity setpoint to a real/simulated robot over `cmd_vel`, reusing
-   the **Lab 1** stack.
-
-## 3.3 Evaluation for Part 3
-
-Same metric table as Part 2 (crash, on-road %, overtakes, return, per-rule violations) **plus the
-intersection rules**, on MetaDrive scenarios, **plus** a CBF-intervention rate and a check that the
-CBF and the discrete shield agree. The narrative: the NeSy benefit shown on `highway-env`
-**transfers to a realistic simulator and a robotics velocity interface**, with safety guaranteed by
-the CBF rather than only enforced by discrete masking.
+A MetaDrive checkpoint on Drive, the metric table (incl. intersection rules + CBF agreement), and
+**`part3_metadrive.mp4` saved to Drive**.
 
 ---
 
-# Part 4 — Head-to-head capstone (two agents racing)
+# Part 4 — Race: NeSy vs no-NeSy
 
-**Objective:** close the project with a single, intuitive demonstration of its whole thesis — put
-**two agents in the same scene and let them race**: each tries to overtake the background traffic
-and surpass the other, while we score not only *who finishes first* but *who stays safe and
-rule-compliant under competitive pressure*. This is the capstone for the exam discussion, and it is
-deliberately built to reuse Parts 1–3 rather than add new machinery.
+**Notebook:** `colab_4_race.ipynb` — the capstone: put the two agents in the **same scene** and let
+them **race** — each overtakes the background traffic and tries to surpass the other — scoring both
+*who finishes first* **and** *who stays safe and rule-compliant under competitive pressure*.
 
-## 4.1 The framing that makes it meaningful
+## 4.1 The matchup
 
-The race is **not** two arbitrary cars. It is:
+- **Agent A — no-NeSy:** the frozen Part-1 baseline (optimises reward, no traffic law).
+- **Agent B — NeSy:** the Part-2 (highway-env) or Part-3 (MetaDrive) shielded + fine-tuned agent.
 
-- **Agent A — the pure-neural baseline** (the frozen Part-1 policy: optimises reward, knows no
-  traffic law), versus
-- **Agent B — the NeSy agent** (the Part-2 shielded + logic-fine-tuned policy; in MetaDrive, with
-  the CBF/VO safety filter).
+Same start, same background traffic, same seed; lane assignment swapped across races to cancel
+positional bias. Each agent runs its **own** policy on its **own** local observation through the
+**same** `predicates()` / shield / CBF — no shared weights.
 
-Both start from the same position, with the same background traffic and the same seed. The race then
-answers the project's central question in one picture: *does the rule-following agent overtake as
-fast — or faster — while crashing less and breaking fewer rules, even when the incentive is to drive
-aggressively to win?* The productive tension is explicit: a "be ahead" reward pushes toward
-aggression, the rules pull toward safety. Showing B wins-or-ties on progress **and** dominates on
-safety is the strongest result the project can present.
+## 4.2 Notebook contents (in order)
 
-## 4.2 Two tiers — implement the first, keep the second as a stretch
+1. **Setup** + load `part1_best` (Agent A) and `part2_nesy` / `part3_metadrive` (Agent B) from Drive.
+2. **Build the multi-agent race env.** `make_race_env(cfg, n_agents=2)` — MetaDrive native MARL
+   (preferred) or `highway-env` with `controlled_vehicles=2`.
+3. **Define the race** (in the YAML `race:` block): winner = most longitudinal progress in a fixed
+   time budget (or first past a virtual finish line / MetaDrive destination); rule for **agent–agent
+   collisions** (logged separately from hitting background traffic).
+4. **Run N races** (fixed seeds) and score per agent: win rate / finishing position, time-to-finish /
+   progress, overtakes of background traffic, crash rate (incl. agent–agent), per-rule violation rate
+   (independent monitor), shield/CBF intervention rate.
+5. **Save to Drive:** the race scorecard **and `videos/part4_race.mp4`** — a **side-by-side race
+   video** of the two agents, the single most legible artefact for the exam.
 
-- **Tier 1 — evaluation-time race (recommended, low risk).** Both agents are *already trained*
-  (single-agent, Parts 1–2/3). They are simply deployed together in one multi-agent env and the race
-  is scored. No joint training, no new RL algorithm. This reuses everything already built and is the
-  intended deliverable for Part 4.
-- **Tier 2 — competitive self-play (explicit stretch, higher risk).** Actually train the two against
-  each other (self-play / MARL via PettingZoo or RLlib) with a racing reward. This introduces
-  non-stationarity and substantial tuning and is a small research project in itself — listed as an
-  optional stretch, **not** a commitment.
+## 4.3 Honest caveat
 
-## 4.3 Where it runs
+A pure "be ahead of the other" reward incentivises aggressive, rule-breaking driving — so the
+scorecard must **always** pair finishing position with crash + violation metrics, never the winner
+alone. Competitive self-play training (MARL via PettingZoo/RLlib) stays an explicit stretch goal; the
+deliverable is the **evaluation-time** race using already-trained policies.
 
-- **MetaDrive (preferred).** Part 3 already moves to MetaDrive, which ships native multi-agent
-  (MARL) environments with a dict observation/action interface, so two controllable agents are
-  first-class. The race rides on the Part-3 velocity action and the CBF/VO safety stack.
-- **`highway-env` (lighter alternative).** Supports multiple controlled vehicles
-  (`controlled_vehicles > 1` with the multi-agent observation/action wrappers); each agent gets its
-  own local kinematic view and the other controlled car appears as a nearby vehicle. Good for a quick
-  version before the MetaDrive one.
+## 4.4 Exit criterion (capstone result)
 
-In both, each agent runs its **own** policy on its **own** local observation and outputs its **own**
-action — no shared weights required.
-
-## 4.4 Code surface (function-only, reuses existing modules)
-
-```
-eval/race.py    make_race_env(cfg, n_agents=2) -> env          # multi-agent env (highway-env or MetaDrive)
-                race(model_a, model_b, cfg, seeds) -> race_metrics
-                record_race_video(model_a, model_b, cfg, path)
-```
-
-`race()` steps the multi-agent env, feeding each agent its slice of the observation through the
-**same** `predicates()` / `safety_shield()` / CBF used elsewhere, and logs the per-agent outcome.
-
-## 4.5 What has to be defined (the honest engineering)
-
-- **Winner / finish condition.** `highway-env` has no finish line natively, so define the winner as
-  *most longitudinal progress in a fixed time budget* (or first past a virtual line); in MetaDrive use
-  the route's destination. Put the rule in the YAML.
-- **Agent–agent collisions.** Decide and log what happens when the two *controlled* cars touch (race
-  void / both penalised / safety-failure for whoever caused it) — distinct from hitting background
-  traffic.
-- **Fairness.** Identical start, identical traffic, identical seeds per race; swap which lane each
-  agent starts in across races to cancel any positional bias.
-- **Reward caveat (important).** A pure "be ahead of the other" reward incentivises unsafe,
-  rule-breaking driving. That is fine as a *finding* (it showcases the shield/CBF), but it means the
-  scorecard must always pair finishing position **with** safety/violation metrics — never report the
-  winner alone.
-
-## 4.6 Evaluation for Part 4
-
-Run *N* races (fixed seeds) and report, per agent:
-
-| Metric | Agent A (baseline) | Agent B (NeSy) |
-|---|---|---|
-| Win rate / finishing position | | |
-| Time-to-finish (or progress in budget) | | |
-| Overtakes of background traffic | | |
-| Crash rate (incl. agent–agent) | | |
-| Per-rule violation rate (independent MTL monitor) | | |
-| Shield / CBF intervention rate | — | |
-
-Plus a side-by-side **race video** — the single most legible artefact for the exam discussion.
-
-**Exit criterion for Part 4 (the capstone result):** in head-to-head racing, the NeSy agent
-finishes **as fast or faster** than the pure-neural baseline while recording **fewer crashes and
-provably fewer rule violations** — the project's whole thesis shown as a race.
+In head-to-head racing, the NeSy agent finishes **as fast or faster** than the no-NeSy baseline while
+recording **fewer crashes and provably fewer rule violations**, with **`part4_race.mp4` saved to
+Drive** as the visual proof.
 
 ---
 
-## 5. Revised repository structure (labs included)
+## 5. Repository structure
 
 ```
 nesy-highway-driving/
 ├── README.md
 ├── project.md
-├── IMPLEMENTATION_PLAN.md          # this document
+├── IMPLEMENTATION_PLAN.md              # this document
 ├── ARCHITECTURE_nesy-highway-driving.md
 ├── requirements.txt
-├── colab.ipynb                     # clone → train → evaluate → NeSy
-├── bash/setup_colab.sh
+├── bash/setup_colab.sh                 # clone repo + pip install + make Drive folders
 ├── configs/
-│   └── highway.yaml                # env + PPO + DQN + rules{} + metadrive{} + cbf{}
+│   └── highway.yaml                    # env + PPO + DQN + rules{} + metadrive{} + cbf{} + race{}
+├── notebooks/
+│   ├── colab_1_baseline.ipynb          # Part 1  -> part1_best.mp4
+│   ├── colab_2_nesy.ipynb              # Part 2  -> part2_nesy.mp4
+│   ├── colab_3_metadrive.ipynb         # Part 3  -> part3_metadrive.mp4
+│   └── colab_4_race.ipynb              # Part 4  -> part4_race.mp4
 ├── envs/
-│   ├── highway_factory.py          # make_env(cfg)              [Parts 1–2]
-│   └── metadrive_factory.py        # make_env_md(cfg), (v,ω)    [Part 3]
+│   ├── highway_factory.py              # make_env(cfg)                     [Parts 1–2, 4]
+│   └── metadrive_factory.py            # make_env_md(cfg), (v,ω)           [Part 3]
 ├── agents/
-│   └── baselines.py                # train_ppo/dqn, load, finetune_logic_reward   [Lab 5 RL]
+│   └── baselines.py                    # train_ppo/dqn, load, select_best, finetune_logic_reward
 ├── eval/
-│   ├── evaluate.py                 # evaluate(), record_video()
-│   └── race.py                     # make_race_env(), race(), record_race_video()   [Part 4]
+│   ├── evaluate.py                     # evaluate(), record_video()  -> .mp4
+│   └── race.py                         # make_race_env(), race(), record_race_video() -> .mp4
 ├── nesy/
-│   ├── ROADMAP.md                  # five-stage NeSy plan
-│   ├── RULES.md                    # rule → predicate → constraint/heuristic
-│   └── roadmap.py                  # predicates(), safety_shield()   [functions only]
-├── labs/                           # the course toolkit, as reusable functions
-│   ├── lab1_cmd_vel.py             # velocity/cmd_vel interface + camera-follow controller
-│   ├── lab2_lidar_avoidance.py     # reactive LIDAR avoidance + range→predicate helpers
-│   ├── lab3_fsm.py                 # finite-state-machine behaviour layer (shield host)
-│   ├── lab4_velocity_obstacles.py  # VO/RVO safe-gap + optional MCTS manoeuvre search
-│   └── lab5_cbf.py                 # Control Barrier Function safety filter on (v, ω)
-└── paper/                          # temporal-logic rule papers + notes
+│   ├── ROADMAP.md
+│   ├── RULES.md                        # rule -> predicate -> constraint/heuristic
+│   └── roadmap.py                      # predicates(), safety_shield()     [functions only]
+├── labs/
+│   ├── lab1_cmd_vel.py                 # velocity/cmd_vel + camera-follow
+│   ├── lab2_lidar_avoidance.py         # reactive LIDAR + range->predicate
+│   ├── lab3_fsm.py                     # FSM behaviour layer (shield host)
+│   ├── lab4_velocity_obstacles.py      # VO/RVO safe-gap + optional MCTS
+│   └── lab5_cbf.py                     # CBF safety filter on (v, ω)
+└── paper/                              # temporal-logic rule papers + notes
 ```
 
-Each `labs/*.py` stays **function-only** (consistent with the architecture contract) and is imported
-by the shield, the predicate library, and the MetaDrive factory.
+All `.py` files are **function-only**; the four notebooks are the only place code executes.
 
 ---
 
 ## 6. Sequencing, risks, and definition of done
 
-**Order of work.** Part 1 fully (frozen checkpoints + study) → Part 2 Step A (predicates, grounded
-with **Lab 2/Lab 4** helpers) → Step B (FSM shield, **Lab 3**, zero-retrain) → Step C (reward
-fine-tune) → optional D/E → Part 3 (velocity action **Lab 1**, CBF **Lab 5**, VO **Lab 4**,
-intersections) → Part 4 (head-to-head race, baseline vs NeSy). Never start a layer before the
-previous exit criterion is met, or the A/B comparisons stop being fair.
+**Order.** Part 1 (save best to Drive + `part1_best.mp4`) → Part 2 (load best, NeSy fine-tune, save
+`part2_nesy.mp4`) → Part 3 (MetaDrive, save `part3_metadrive.mp4`) → Part 4 (race, save
+`part4_race.mp4`). Each notebook loads the previous notebook's Drive checkpoint; never start a part
+before the previous exit criterion (including its saved `.mp4`) is met.
 
 **Key risks & mitigations.**
 
-- *Reward shaping confounds the comparison* → keep Part-1 shaping minimal; measure violations with
-  the **independent MTL monitor**, never the reward the agent optimises.
-- *Predicate grounding is wrong* → unit-test `predicates()` on hand-built scenes (and on recorded
-  **LIDAR** frames) before trusting any downstream number.
-- *Shield too aggressive (kills throughput)* → report intervention rate; it should rarely fire once
-  Step C has trained compliance in.
-- *Discrete guarantee doesn't transfer to `cmd_vel`* → that is exactly what the **CBF (Lab 5)**
-  solves; validate by showing CBF and discrete shield agree on shared scenarios.
-- *MetaDrive continuous control is harder to train* → reuse PPO, short curriculum, keep VO + CBF as a
-  safety net.
-- *Race reward rewards aggression (Part 4)* → never score finishing position alone; always pair it
-  with crash + violation metrics, and keep competitive self-play (Tier 2) as an optional stretch.
+- *Reward shaping confounds the comparison* → keep Part-1 shaping light; count violations with the
+  **independent MTL monitor**, never the reward the agent optimises.
+- *Predicate grounding is wrong* → unit-test `predicates()` on hand-built scenes and recorded LIDAR
+  frames before trusting downstream numbers.
+- *Shield too aggressive (kills throughput)* → report intervention rate; it should rarely fire after
+  the Step-C fine-tune.
+- *Discrete guarantee doesn't transfer to `cmd_vel`* → that is what the **CBF (Lab 5)** solves;
+  validate by showing CBF and discrete shield agree.
+- *Race reward rewards aggression* → always pair finishing position with crash + violation metrics.
+- *Video recording fails on headless Colab* → use an offscreen/virtual display for rendering so every
+  part reliably writes its `.mp4` to Drive.
 
-**Definition of done.** A reproducible notebook that, from fixed seeds, produces: (1) the PPO/DQN
-baseline and study; (2) the four-config NeSy comparison table on `highway-env` showing equal-or-
-better overtaking with provably fewer violations; (3) the same pipeline on MetaDrive with a velocity
-action, a CBF safety filter, and intersection rules; and (4) a head-to-head **race** (baseline vs
-NeSy) with a per-agent scorecard and a side-by-side video showing the NeSy agent finishes as fast or
-faster while crashing and violating less. Everything mirrored to Drive, every parameter in the YAML,
-every rule traceable to a formula in [`paper/`](paper/) and every safety mechanism traceable to a
-lab.
+**Definition of done.** Four reproducible notebooks that, from fixed seeds, produce: (1) the PPO-vs-DQN
+study with the best model saved to Drive; (2) the NeSy fine-tune with the four-config comparison; (3)
+the MetaDrive pipeline with velocity action, CBF, and intersection rules; (4) the head-to-head race —
+**and an `.mp4` saved to Drive at the end of every part** (`part1_best`, `part2_nesy`,
+`part3_metadrive`, `part4_race`). Every parameter in the YAML, every rule traceable to a formula in
+[`paper/`](paper/), every safety mechanism traceable to a lab.

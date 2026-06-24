@@ -224,6 +224,26 @@ def logic_penalty(preds, cfg):
 
 
 # =============================================================================
+# Part 3 — intersection predicates (2022 paper) — stubbed pending MetaDrive API
+# =============================================================================
+def intersection_predicates(scene, cfg):
+    """Ground the intersection rules (stop sign, light, priority, left-turn).
+
+    TODO: implement once MetaDrive exposes intersection state (stop-line distance,
+    traffic-light phase, priority/right-of-way, crossing vehicles). The 2022-paper
+    rules map to: ``must_stop_at_line``, ``light_is_red``, ``has_right_of_way``,
+    ``yields_left_turn``. Returns all-False until wired so Part-3 evaluation runs
+    without intersection penalties rather than guessing.
+    """
+    return {
+        "must_stop_at_line": False,
+        "light_is_red": False,
+        "has_right_of_way": True,
+        "yields_left_turn": True,
+    }
+
+
+# =============================================================================
 # Stage E — independent MTL monitor (audit; NOT what the agent optimises)
 # =============================================================================
 def rule_violations(preds, cfg):

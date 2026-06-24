@@ -13,5 +13,7 @@ moviepy>=1.0.3            # video encoding for record_video()
 imageio>=2.31
 imageio-ffmpeg>=0.4.9
 pandas>=2.0              # metric tables in the notebooks
+matplotlib>=3.7          # rendering frames inline (env study)
+pyvirtualdisplay>=3.0    # headless rendering for .mp4 capture (needs apt xvfb)
 tensorboard>=2.14
 tqdm>=4.66

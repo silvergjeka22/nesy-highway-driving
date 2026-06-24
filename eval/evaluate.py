@@ -178,4 +178,35 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
         imageio.mimsave(path, frames, fps=10)
     return path
 
+
+def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
+    """Record a short random-policy rollout (Part-1 environment study).
+
+    Lets the reader see the task before any learning. Returns ``path``.
+    """
+    import imageio
+
+    seed = seed if seed is not None else cfg["eval_seeds"][0]
+    n_steps = n_steps if n_steps is not None else cfg["env"]["config"].get("duration", 40)
+    env_fn = env_fn or (lambda c, render: make_env(c, render=render))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    env = env_fn(cfg, True)
+    frames = []
+    try:
+        env.reset(seed=int(seed))
+        for _ in range(int(n_steps)):
+            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+            frame = env.render()
+            if frame is not None:
+                frames.append(np.asarray(frame))
+            if terminated or truncated:
+                env.reset()
+    finally:
+        env.close()
+
+    if frames:
+        imageio.mimsave(path, frames, fps=10)
+    return path
+
 # Part 4 (head-to-head race) lives in eval/race.py: race(), record_race_video().

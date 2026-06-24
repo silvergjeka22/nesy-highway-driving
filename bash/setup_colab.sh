@@ -49,7 +49,9 @@ fi
 # Scrub the token from the stored remote so it never persists in .git/config.
 git -C "$WORKDIR" remote set-url origin "$CLEAN_URL"
 
-# 2. Install dependencies.
+# 2. Install dependencies (xvfb enables headless .mp4 rendering on Colab).
+echo "==> Installing xvfb (headless rendering)."
+apt-get -qq install -y xvfb >/dev/null 2>&1 || true
 echo "==> Installing requirements."
 pip install -q -r "$WORKDIR/requirements.txt"
 

@@ -105,6 +105,12 @@ eval:
   deterministic: true
   video_episodes: 1
 
+# Best-model selection rule (Part 1) — explicit, not arbitrary. Among models
+# whose mean return is within `within_return_pct` of the top, pick by `rule`.
+select:
+  within_return_pct: 0.10    # 10% band below the top mean return
+  rule: min_crash_rate       # safety-first: lowest crash rate wins (tie -> higher return)
+
 # =============================================================================
 # PART 2 — NeSy rules (predicates -> shield -> logic-shaped reward)
 # Parameter values from Maierhofer 2020, Table II (SI units). car_length and the

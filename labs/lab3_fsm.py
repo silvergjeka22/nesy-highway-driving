@@ -11,6 +11,10 @@ Function-only. The discrete-action vocabulary matches highway-env's
 """
 
 STATES = ["CRUISE", "FOLLOW", "OVERTAKE_LEFT", "MERGE", "EMERGENCY_STOP"]
+# Part-3 (MetaDrive) intersection states, from the 2022 paper. The transitions
+# into these need the intersection observation (stop sign / light / priority),
+# which is grounded in envs/metadrive_factory.py -> nesy.intersection_predicates.
+INTERSECTION_STATES = ["STOP_SIGN_WAIT", "YIELD", "LIGHT_STOP"]
 ALL_ACTIONS = ["LANE_LEFT", "IDLE", "LANE_RIGHT", "FASTER", "SLOWER"]
 
 
@@ -56,6 +60,12 @@ def admissible_actions(state, preds, cfg):
       * stay-on-road / RI1 — in EMERGENCY_STOP only SLOWER/IDLE are allowed.
     """
     if state == "EMERGENCY_STOP":
+        return ["SLOWER", "IDLE"]
+
+    # Part-3 intersection states: must be able to come to a stop / yield.
+    # TODO: refine per-state masks once MetaDrive intersection predicates are wired
+    # (must_stop_at_line, has_right_of_way, light_is_red).
+    if state in INTERSECTION_STATES:
         return ["SLOWER", "IDLE"]
 
     allowed = list(ALL_ACTIONS)
