@@ -55,6 +55,12 @@ apt-get -qq install -y xvfb >/dev/null 2>&1 || true
 echo "==> Installing requirements."
 pip install -q -r "$WORKDIR/requirements.txt"
 
+# Colab's pre-installed C-extensions (pandas, scipy, matplotlib) are built against
+# NumPy 2.x. Make sure nothing in the resolve above left a NumPy 1.x behind, or the
+# kernel throws "numpy.dtype size changed ... Expected 96 ... got 88" on import.
+echo "==> Enforcing a NumPy 2.x build."
+pip install -q -U "numpy>=2.0,<3"
+
 # 3. Create Drive results folders (mirrors paths in configs/highway.yaml).
 echo "==> Creating Drive results folders."
 for sub in checkpoints videos metrics tb; do

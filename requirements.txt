@@ -7,7 +7,9 @@ gymnasium>=0.29.1
 stable-baselines3>=2.3.0
 sb3-contrib>=2.3.0          # reserved (e.g. maskable PPO as a shield variant)
 torch>=2.1.0
-numpy>=1.24,<2.0           # legacy-gym (SB3 compat shim) is not NumPy-2.0 safe
+numpy>=1.26                # NumPy 2.x is fine (gymnasium/SB3/highway-env support it);
+                           # pinning <2.0 forces a downgrade that breaks Colab's
+                           # NumPy-2-built wheels -> "numpy.dtype size changed" ABI error.
 pyyaml>=6.0
 moviepy>=1.0.3            # video encoding for record_video()
 imageio>=2.31
