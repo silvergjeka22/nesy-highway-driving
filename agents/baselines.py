@@ -12,6 +12,7 @@ from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
 silence_warnings()
 
 import os  # noqa: E402
+import math  # noqa: E402
 import time  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -71,10 +72,16 @@ class _ProgressPrinter(BaseCallback):
         self._first_done = False
         self._curve_init = False
         self._t0 = None
+        self._start_step = 0
         self._next = self.print_freq
 
     def _on_training_start(self):
+        # Anchor progress to THIS call's starting step so the rate, ETA and print
+        # cadence are correct even for a warm-started fine-tune (where
+        # num_timesteps already carries the Part-1 step count).
         self._t0 = time.time()
+        self._start_step = self.num_timesteps
+        self._next = self.num_timesteps + self.print_freq
 
     def _log_curve(self, step, r, ln):
         """Append one fine-grained curve point (every print_freq) for plotting."""
@@ -89,7 +96,8 @@ class _ProgressPrinter(BaseCallback):
 
     def _speed(self):
         elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
-        sps = self.num_timesteps / elapsed
+        done = max(self.num_timesteps - self._start_step, 0)   # steps in THIS session
+        sps = done / elapsed
         if self.total_steps:
             eta = max(0.0, (self.total_steps - self.num_timesteps) / max(sps, 1e-6))
             return f" | {sps:4.0f} steps/s | ETA {eta/60:4.1f} min"
@@ -173,6 +181,20 @@ def _attach_logger(model, cfg, tag):
     return folder
 
 
+def _effective_total(total_timesteps, rollout_steps):
+    """Round a step budget up to a whole number of rollouts.
+
+    SB3 only checks ``total_timesteps`` at rollout boundaries, so a run actually
+    stops at the next multiple of the rollout size — ``n_steps * n_envs`` for PPO,
+    ``train_freq * n_envs`` for DQN. Training to *that* number (and reporting it)
+    is what makes the printed ETA reach 0 exactly when training ends, instead of
+    hitting 0 early and overshooting (e.g. 1000 steps with 8 envs × 512 actually
+    runs 4096). Same actual run length either way; only the reported target moves.
+    """
+    rollout_steps = max(1, int(rollout_steps))
+    return math.ceil(total_timesteps / rollout_steps) * rollout_steps
+
+
 # =============================================================================
 # Part 1 — baselines on highway-env
 # =============================================================================
@@ -197,11 +219,16 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     _attach_logger(model, cfg, "ppo")
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
     pf = p.get("print_freq", cfg.get("print_freq", 500))
-    print(f"[PPO] training for {p['total_timesteps']} steps on device='{device}' "
-          f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=p["total_timesteps"],
+    n_envs = max(1, int(cfg.get("n_envs", 1)))
+    # PPO collects n_steps per env before each update, so the run rounds up to the
+    # next multiple of n_steps*n_envs — train to that so the ETA ends at 0.
+    total = _effective_total(p["total_timesteps"], p["n_steps"] * n_envs)
+    rounded = f" (rounded up from {p['total_timesteps']})" if total != p["total_timesteps"] else ""
+    print(f"[PPO] training for {total} steps{rounded} on device='{device}' "
+          f"with n_envs={n_envs} (printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=total,
                                curve_csv=os.path.join(curve_dir(cfg, "ppo"), "curve.csv"))
-    model.learn(total_timesteps=p["total_timesteps"], callback=printer)
+    model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
         print(f"[PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
@@ -234,11 +261,16 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     _attach_logger(model, cfg, "dqn")
     path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
     pf = d.get("print_freq", cfg.get("print_freq", 500))
-    print(f"[DQN] training for {d['total_timesteps']} steps on device='{device}' "
-          f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=d["total_timesteps"],
+    n_envs = max(1, int(cfg.get("n_envs", 1)))
+    # DQN collects train_freq steps per env before each gradient update.
+    tf = d["train_freq"] if isinstance(d["train_freq"], int) else 1
+    total = _effective_total(d["total_timesteps"], tf * n_envs)
+    rounded = f" (rounded up from {d['total_timesteps']})" if total != d["total_timesteps"] else ""
+    print(f"[DQN] training for {total} steps{rounded} on device='{device}' "
+          f"with n_envs={n_envs} (printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=total,
                                curve_csv=os.path.join(curve_dir(cfg, "dqn"), "curve.csv"))
-    model.learn(total_timesteps=d["total_timesteps"], callback=printer)
+    model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
         print(f"[DQN] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
@@ -282,11 +314,15 @@ def finetune_logic_reward(model, cfg, drive_dir=None, fast=False):
     _attach_logger(model, cfg, "part2_nesy")
     path = drive_dir or drive_path(cfg, "checkpoints", "part2_nesy.zip")
     pf = ft.get("print_freq", cfg.get("print_freq", 500))
-    print(f"[NESY-FT] fine-tuning for {ft['total_timesteps']} steps on "
+    # Warm-start: training continues from the Part-1 step count (reset_num_timesteps
+    # =False). Round the extra budget to a whole rollout and target start+extra so
+    # the ETA counts down over THIS fine-tune, not the absolute timeline.
+    start = int(model.num_timesteps)
+    extra = _effective_total(ft["total_timesteps"], getattr(model, "n_steps", 1))
+    print(f"[NESY-FT] fine-tuning for {extra} more steps on "
           f"device='{model.device}' (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=ft["total_timesteps"])
-    model.learn(total_timesteps=ft["total_timesteps"], callback=printer,
-                reset_num_timesteps=False)
+    printer = _ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra)
+    model.learn(total_timesteps=extra, callback=printer, reset_num_timesteps=False)
 
     if printer.saved_best:
         print(f"[NESY-FT] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
@@ -321,10 +357,12 @@ def train_ppo_md(cfg, drive_dir=None):
     _attach_logger(model, cfg, "part3_metadrive")
     path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
     pf = p.get("print_freq", cfg.get("print_freq", 500))
-    print(f"[MD-PPO] training for {p['total_timesteps']} steps on device='{device}' "
+    # Single MetaDrive env, so the rollout is n_steps; round the budget up to it.
+    total = _effective_total(p["total_timesteps"], p["n_steps"])
+    print(f"[MD-PPO] training for {total} steps on device='{device}' "
           f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("MD-PPO", pf, best_path=path, total_steps=p["total_timesteps"])
-    model.learn(total_timesteps=p["total_timesteps"], callback=printer)
+    printer = _ProgressPrinter("MD-PPO", pf, best_path=path, total_steps=total)
+    model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
         print(f"[MD-PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
