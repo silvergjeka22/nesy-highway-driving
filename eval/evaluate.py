@@ -214,10 +214,19 @@ def record_video_safe(model_path, algo, cfg_path, out_path,
         "print('VIDEO_OK', p)\n"
     )
     try:
-        r = subprocess.run([sys.executable, "-c", code], timeout=timeout)
-        return out_path if r.returncode == 0 else None
-    except Exception:
+        r = subprocess.run([sys.executable, "-c", code], timeout=timeout,
+                           capture_output=True, text=True)
+    except Exception as e:
+        print("record_video_safe: could not start the render process:", repr(e))
         return None
+    if r.returncode == 0:
+        return out_path
+    # Surface why the child failed (instead of a silent None).
+    print(f"record_video_safe: render failed (returncode={r.returncode}). Last output:")
+    tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]
+    for line in tail:
+        print("   ", line)
+    return None
 
 
 def show_video(path, width=720):
