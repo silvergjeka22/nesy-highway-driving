@@ -63,7 +63,7 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
 
 | Notebook | Part | What it does | Saved to Drive |
 |---|---|---|---|
-| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN**, log training curves, evaluate + compare, pick the **best** | `part1_best_{tag}.zip` **+ `part1_best.mp4`** + plots |
+| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN**, log training curves, evaluate + compare, pick the **best** | `part1_best_{tag}.zip` **+ `part1_best.mp4`** (+ `dqn_test.mp4`) + plots |
 | [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, **compare shield vs no-shield**, pick best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
 | [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | port to **MetaDrive** (velocity action, CBF/VO, intersections) | `part3_metadrive.zip` **+ `part3_metadrive.mp4`** |
 | [`colab_4_race.ipynb`](notebooks/colab_4_race.ipynb) | **Part 4** | **race** the NeSy agent vs the no-NeSy baseline in one scene | race scorecard **+ `part4_race.mp4`** |
@@ -88,10 +88,16 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
    | **DQN** | off-policy value-based | second baseline; more sample-efficient on discrete actions but more brittle in noisy traffic |
 
 4. **Evaluate + compare** on the same held-out seeds: crash rate, on-road %, overtakes/episode,
-   return, length — mean ± std, side by side, with a **comparison bar chart**.
-5. **Pick the best** by the explicit YAML rule (`select:` — lowest crash rate among models within
-   `within_return_pct` of the top return; safety-first).
-6. **Save** the best checkpoint, the metrics, the plots, and `part1_best.mp4` to Drive.
+   return, length — mean ± std, side by side, with a **comparison bar chart**. Because crashes cut
+   episodes short, evaluation also reports **overtaking diagnostics** — overtakes per 100 steps,
+   the fraction of episodes with ≥1 overtake, and the max overtakes in an episode — so a low raw
+   count isn't mistaken for "the car never overtakes". `evaluate()` also saves a **≥30s test clip**
+   (`eval.video_seconds`) of each policy driving, for PPO *and* DQN.
+5. **Pick the best** — PPO is the recommended baseline (on-policy, safety-first), so it is marked
+   `part1_best` directly; the same explicit `select:` rule (lowest crash rate within
+   `within_return_pct` of the top return) is reused to rank the NeSy configs in Part 2.
+6. **Save** the best checkpoint, the metrics, the plots, and the ≥30s test videos
+   (`part1_best.mp4` for PPO, `dqn_test.mp4` for DQN) to Drive.
 
 ### Part 2 — NeSy + XAI: shield vs reward shaping (`colab_2_nesy.ipynb`)
 
@@ -210,8 +216,9 @@ nesy-highway-driving/
   `/content/drive/MyDrive/nesy-highway-driving/{checkpoints,metrics,videos,metrics/curves}/`.
 - **Fixed seeds**, identical eval seeds across algorithms and parts → every comparison is fair.
 
-**Evaluation metrics:** crash rate · on-road % · overtakes/episode · return · episode length · **plus**
-per-rule violation rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
+**Evaluation metrics:** crash rate · on-road % · overtakes/episode (+ overtakes per 100 steps, %
+episodes with an overtake, max overtakes) · return · episode length · **plus** per-rule violation
+rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
 
 ---
 

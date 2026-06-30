@@ -1,5 +1,5 @@
 # =============================================================================
-# Single source of truth for ALL FOUR PARTS of IMPLEMENTATION_PLAN.md.
+# Single source of truth for ALL FOUR PARTS (see README.md for the full plan).
 # Nothing is hard-coded in the .py modules — every quantity lives here.
 # Loaded once per notebook via utils.load_config().
 #
@@ -9,7 +9,7 @@
 #   Part 4 (race) ........... race{}                    -> eval/record_race_video
 #
 # Rule parameters are taken from Maierhofer et al., "Formalization of Interstate
-# Traffic Rules in Temporal Logic", IEEE IV 2020 (Table II). See nesy/RULES.md.
+# Traffic Rules in Temporal Logic", IEEE IV 2020 (Table II). See README.md §4.
 # =============================================================================
 
 # ---- Reproducibility ---------------------------------------------------------
@@ -73,7 +73,7 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 10000     # current run (raise to ~200000 for a full baseline)
+  total_timesteps: 1000      # quick smoke run to validate the pipeline (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   n_steps: 512               # quick-run: smaller rollout = updates sooner (raise to 2048 for full)
   batch_size: 256
@@ -90,15 +90,15 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 10000     # current run (raise to ~200000 for a full baseline)
+  total_timesteps: 1000      # quick smoke run to validate the pipeline (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   buffer_size: 50000
-  learning_starts: 1000
+  learning_starts: 100       # start learning early so the 1000-step smoke run actually trains
   batch_size: 64
   gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 1000
+  target_update_interval: 250  # update the target net a few times within the short run
   exploration_fraction: 0.2
   exploration_final_eps: 0.05
   policy_kwargs:
@@ -108,7 +108,11 @@ dqn:
 eval:
   episodes_per_seed: 5
   deterministic: true
-  video_episodes: 1
+  video_episodes: 1          # episodes per video when no min length is requested
+  video_seconds: 30          # evaluate() saves a clip at least this long (PPO and DQN)
+  video_max_episodes: 60     # cap on episodes stitched together to reach video_seconds
+                             # (high enough that even DQN's short crashed episodes hit 30s)
+  video_fps: 10
 
 # Best-model selection rule (Part 1) — explicit, not arbitrary. Among models
 # whose mean return is within `within_return_pct` of the top, pick by `rule`.
@@ -120,7 +124,7 @@ select:
 # PART 2 — NeSy rules (predicates -> shield -> logic-shaped reward)
 # Parameter values from Maierhofer 2020, Table II (SI units). car_length and the
 # highway-env-scaled v_max are adapted to the simulator; everything else matches
-# the paper so each predicate is traceable to a formula. See nesy/RULES.md.
+# the paper so each predicate is traceable to a formula. See README.md §4.
 # =============================================================================
 rules:
   enabled: true
@@ -174,7 +178,7 @@ fsm:
 # Warm-start fine-tune for the logic-shaped reward (Step C). Lower LR, fewer
 # steps than Part 1 — the genuine "fine-tune".
 finetune:
-  total_timesteps: 5000      # quick run for now (raise to ~60000 for a full fine-tune)
+  total_timesteps: 1000      # quick smoke run for now (raise to ~60000 for a full fine-tune)
   learning_rate: 0.0001
 
 # =============================================================================

@@ -1,9 +1,12 @@
 """Evaluation harness for all four parts.
 
-  * ``evaluate``           — metrics over held-out seeds, with optional safety
-    shield and per-rule violation counting (independent MTL monitor).
-  * ``record_video``       — MP4 of one model driving (Parts 1-3).
-  (Part 4's head-to-head race lives in ``eval/race.py``.)
+  * ``evaluate``            — metrics over held-out seeds, with optional safety
+    shield, per-rule violation counting (independent MTL monitor), and an
+    optional ≥``video_seconds`` clip of the same policy driving.
+  * ``record_video``        — MP4 of one model driving (Parts 1-3).
+  * ``record_random_video`` — short random-policy clip (the Part-1 env study).
+  * ``show_video``          — embed an MP4 inline in the notebook.
+  * ``select_nesy_method``  — rank the Part-2 NeSy configs (shield vs reward).
 
 Per-rule violations are counted by ``nesy.roadmap.rule_violations`` on the SI
 scene, NOT by the shield/reward the agent sees, so "fewer violations" is not
@@ -19,12 +22,15 @@ import numpy as np
 
 from envs.highway_factory import make_env, read_scene
 
+# Rules audited by the independent monitor (order used everywhere we tabulate).
+_RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
+
 
 # =============================================================================
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None):
+             env_fn=None, scene_fn=None, video_path=None, video_seconds=None):
     """Evaluate ``model`` over held-out seeds and aggregate metrics.
 
     Args:
@@ -35,9 +41,15 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
         count_violations: report per-rule violation rates (independent monitor).
         env_fn: builder ``(cfg, render) -> env``; defaults to highway ``make_env``.
         scene_fn: ``env -> scene dict``; defaults to highway ``read_scene``.
+        video_path: if set, also save a clip of this policy driving (same shield
+            setting) to this path, at least ``video_seconds`` long, and return it
+            under ``video``. Lets one call both score *and* show a model.
+        video_seconds: minimum video length; defaults to ``cfg['eval']['video_seconds']``.
 
     Returns:
-        dict with ``summary`` (incl. ``rule_violation_rate``) and ``episodes``.
+        dict with ``summary`` (headline metrics + overtaking diagnostics, and
+        ``rule_violation_rate`` when requested), ``episodes``, ``seeds`` and,
+        when ``video_path`` is set, ``video``.
     """
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
     env_fn = env_fn or (lambda c, render: make_env(c, render=render))
@@ -59,7 +71,15 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
     finally:
         env.close()
 
-    return {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
+    result = {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
+
+    if video_path is not None:
+        secs = video_seconds if video_seconds is not None else ec.get("video_seconds", 30)
+        result["video"] = record_video(
+            model, cfg, video_path, apply_shield=apply_shield,
+            env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
+        )
+    return result
 
 
 def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
@@ -71,7 +91,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     done = False
     ret = native_ret = 0.0
     steps = offroad_steps = 0
-    viol = {k: 0 for k in ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")}
+    viol = {k: 0 for k in _RULES}
 
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
@@ -125,12 +145,27 @@ def _summarise(rows, count_violations):
         "native_return": ms("native_return"),
         "length": ms("length"),
     }
+
+    # Overtaking diagnostics — episodes are cut short by crashes, so the raw
+    # overtake count understates the policy. Normalising by episode length (rate
+    # per 100 steps) and reporting how *often* it overtakes at all gives a fairer
+    # read on whether the car actually passes traffic.
+    overtakes = [r["overtakes"] for r in rows]
+    per100 = [100.0 * o / max(1, r["length"]) for o, r in zip(overtakes, rows)]
+    summary["overtake_rate_per_100steps"] = {
+        "mean": float(np.mean(per100)) if n else 0.0,
+        "std": float(np.std(per100)) if n else 0.0,
+    }
+    summary["episodes_with_overtake"] = (
+        sum(1 for o in overtakes if o > 0) / n if n else 0.0
+    )
+    summary["max_overtakes"] = int(max(overtakes)) if overtakes else 0
+
     if count_violations:
         total_steps = sum(r["viol_steps"] for r in rows) or 1
-        rates = {}
-        for k in ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2"):
-            rates[k] = sum(r["violations"][k] for r in rows) / total_steps
-        summary["rule_violation_rate"] = rates  # fraction of steps violating each rule
+        summary["rule_violation_rate"] = {
+            k: sum(r["violations"][k] for r in rows) / total_steps for k in _RULES
+        }  # fraction of steps violating each rule
     return summary
 
 
@@ -186,73 +221,7 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
 
 
 # =============================================================================
-# Kernel-safe video: render in a SUBPROCESS so a pygame segfault on headless
-# Colab cannot crash the notebook kernel ("Canceled future…"). Each call gets a
-# fresh process + fresh display, which also dodges the second-pygame-init crash.
-# =============================================================================
-def record_video_safe(model_path, algo, cfg_path, out_path,
-                      apply_shield=False, min_seconds=30, timeout=900):
-    """Render ``model_path``'s ~``min_seconds`` video in a child process.
-
-    Returns the path on success, else None. Rendering in a subprocess means a
-    pygame/SDL segfault on headless Colab cannot crash the notebook kernel
-    ("Canceled future…"). The model must already be saved to ``model_path`` and
-    the config readable at ``cfg_path`` (both true in the notebooks).
-    """
-    import sys
-    import subprocess
-
-    # Anchor the child to the repo root so it never depends on the caller's cwd.
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
-
-    code = (
-        f"import sys; sys.path.insert(0, {repo_root!r})\n"
-        "from utils import load_config\n"
-        "from agents.baselines import load_model\n"
-        "from eval.evaluate import record_video\n"
-        f"cfg = load_config({cfg_abs!r})\n"
-        f"m = load_model({model_path!r}, {algo!r})\n"
-        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
-        f"min_seconds={min_seconds!r})\n"
-        "print('VIDEO_OK', p)\n"
-    )
-    try:
-        r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
-                           capture_output=True, text=True)
-    except Exception as e:
-        print("record_video_safe: could not start the render process:", repr(e))
-        return None
-    if r.returncode == 0:
-        return out_path
-    # Surface why the child failed (instead of a silent None).
-    print(f"record_video_safe: render failed (returncode={r.returncode}). Last output:")
-    tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]
-    for line in tail:
-        print("   ", line)
-    return None
-
-
-def show_video(path, width=720):
-    """Return an IPython HTML5 ``<video>`` that embeds the MP4 inline (for Colab).
-
-    Base64-embeds the file so it plays in the notebook regardless of the Drive
-    path. Use in the last cell: ``show_video(drive_path(cfg,'videos','part1_best.mp4'))``.
-    """
-    import base64
-    from IPython.display import HTML
-
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    return HTML(
-        f'<video controls autoplay loop width="{width}">'
-        f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
-        "</video>"
-    )
-
-
-# =============================================================================
-# Single-model video (Parts 1-3)
+# Video (Parts 1-3)
 # =============================================================================
 def record_video(model, cfg, path, n_episodes=None, seed=None,
                  apply_shield=False, env_fn=None, scene_fn=None, min_seconds=None):
@@ -263,7 +232,8 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
 
     ``min_seconds``: if set, keep playing episodes until the clip is at least this
     long (≈ ``min_seconds × fps`` frames), capped at ``video_max_episodes`` — so a
-    short episode doesn't give a 2-second video. Otherwise plays ``n_episodes``.
+    short (crashed) episode doesn't give a 2-second video. Otherwise plays
+    ``n_episodes``.
     """
     from utils import save_mp4
     from nesy.roadmap import predicates, safety_shield
@@ -335,5 +305,23 @@ def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
         env.close()
 
     return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
+
+
+def show_video(path, width=720):
+    """Return an IPython HTML5 ``<video>`` that embeds the MP4 inline (for Colab).
+
+    Base64-embeds the file so it plays in the notebook regardless of the Drive
+    path. Use in the last cell: ``show_video(drive_path(cfg,'videos','part1_best.mp4'))``.
+    """
+    import base64
+    from IPython.display import HTML
+
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return HTML(
+        f'<video controls autoplay loop width="{width}">'
+        f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
+        "</video>"
+    )
 
 # Part 4 (head-to-head race) lives in eval/race.py: race(), record_race_video().
