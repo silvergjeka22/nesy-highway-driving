@@ -202,19 +202,23 @@ def record_video_safe(model_path, algo, cfg_path, out_path,
     import sys
     import subprocess
 
+    # Anchor the child to the repo root so it never depends on the caller's cwd.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
+
     code = (
-        "import sys; sys.path.insert(0, '.')\n"
+        f"import sys; sys.path.insert(0, {repo_root!r})\n"
         "from utils import load_config\n"
         "from agents.baselines import load_model\n"
         "from eval.evaluate import record_video\n"
-        f"cfg = load_config({cfg_path!r})\n"
+        f"cfg = load_config({cfg_abs!r})\n"
         f"m = load_model({model_path!r}, {algo!r})\n"
         f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
         f"min_seconds={min_seconds!r})\n"
         "print('VIDEO_OK', p)\n"
     )
     try:
-        r = subprocess.run([sys.executable, "-c", code], timeout=timeout,
+        r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
                            capture_output=True, text=True)
     except Exception as e:
         print("record_video_safe: could not start the render process:", repr(e))
