@@ -186,6 +186,39 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
 
 
 # =============================================================================
+# Kernel-safe video: render in a SUBPROCESS so a pygame segfault on headless
+# Colab cannot crash the notebook kernel ("Canceled future…"). Each call gets a
+# fresh process + fresh display, which also dodges the second-pygame-init crash.
+# =============================================================================
+def record_video_safe(model_path, algo, cfg_path, out_path,
+                      apply_shield=False, timeout=900):
+    """Render ``model_path``'s video in a child process. Returns the path or None.
+
+    The model must already be saved to ``model_path`` and the config readable at
+    ``cfg_path`` (both true in the notebooks). If the child segfaults or errors,
+    the kernel survives and this returns ``None``.
+    """
+    import sys
+    import subprocess
+
+    code = (
+        "import sys; sys.path.insert(0, '.')\n"
+        "from utils import load_config\n"
+        "from agents.baselines import load_model\n"
+        "from eval.evaluate import record_video\n"
+        f"cfg = load_config({cfg_path!r})\n"
+        f"m = load_model({model_path!r}, {algo!r})\n"
+        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)})\n"
+        "print('VIDEO_OK', p)\n"
+    )
+    try:
+        r = subprocess.run([sys.executable, "-c", code], timeout=timeout)
+        return out_path if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+# =============================================================================
 # Single-model video (Parts 1-3)
 # =============================================================================
 def record_video(model, cfg, path, n_episodes=None, seed=None,
