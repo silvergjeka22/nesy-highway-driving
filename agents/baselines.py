@@ -38,9 +38,18 @@ class _ProgressPrinter(BaseCallback):
         self.best_path = best_path
         self.best_rew = -float("inf")
         self.saved_best = False
+        self._first_done = False
         self._next = self.print_freq
 
     def _on_step(self):
+        # Early signal: print as soon as the very first episode completes, so you
+        # see training is live well before the first `print_freq` checkpoint.
+        if not self._first_done and (self.model.ep_info_buffer or []):
+            self._first_done = True
+            e = list(self.model.ep_info_buffer)[-1]
+            print(f"[{self.tag}] step {self.num_timesteps:>7} | first episode done "
+                  f"| reward {float(e['r']):.2f} | length {int(e['l'])}", flush=True)
+
         if self.num_timesteps >= self._next:
             self._next += self.print_freq
             buf = list(self.model.ep_info_buffer or [])
@@ -119,6 +128,7 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast)
 
     device = _resolve_device(cfg)
+
     model = PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
@@ -128,6 +138,7 @@ def train_ppo(cfg, drive_dir=None, fast=False):
         policy_kwargs=p.get("policy_kwargs"), device=device,
         seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
+    print("model ready")
     _attach_logger(model, cfg, "ppo")
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
     pf = p.get("print_freq", cfg.get("print_freq", 500))
