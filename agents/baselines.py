@@ -216,33 +216,6 @@ def load_model(path, algo):
     return _ALGOS[key].load(path)
 
 
-def select_best(candidates, cfg):
-    """Pick the best Part-1 model by the explicit YAML rule.
-
-    Args:
-        candidates: ``{tag: {"model": sb3_model, "metrics": evaluate(...)}}`` —
-            e.g. ``{"ppo": {...}, "dqn": {...}}``.
-        cfg: full config; uses the ``select:`` block.
-
-    Returns:
-        ``(best_model, tag)``. Default rule (``min_crash_rate``): among models
-        whose mean return is within ``within_return_pct`` of the top, choose the
-        lowest crash rate (tie-broken by higher return) — safety-first.
-    """
-    sc = cfg.get("select", {})
-    within = sc.get("within_return_pct", 0.10)
-    items = [(tag, c["model"], c["metrics"]["summary"]) for tag, c in candidates.items()]
-    if not items:
-        raise ValueError("select_best: no candidates given")
-
-    top_return = max(s["return"]["mean"] for _, _, s in items)
-    thresh = top_return - abs(top_return) * within
-    eligible = [(t, m, s) for (t, m, s) in items if s["return"]["mean"] >= thresh] or items
-
-    best = min(eligible, key=lambda x: (x[2]["crash_rate"], -x[2]["return"]["mean"]))
-    return best[1], best[0]
-
-
 # =============================================================================
 # Part 2 — logic-shaped reward fine-tune (Step C)
 # =============================================================================

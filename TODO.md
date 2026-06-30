@@ -9,7 +9,7 @@ fully functional; Parts 3 & 4 are scaffolded with explicit open items.
 
 ### Part 1 — baseline (highway-env)
 - [x] `make_env` + `read_scene` + reward shaping/overtake-counter wrappers.
-- [x] `train_ppo`, `train_dqn`, `load_model`, `select_best` (safety-first rule from the YAML).
+- [x] `train_ppo`, `train_dqn`, `load_model`. Part-1 best is PPO (the recommended baseline), picked directly in the notebook — no selection function.
 - [x] **Training-curve logging** → `metrics/curves/<algo>/progress.csv` (CSV + TensorBoard) and
       `plot_training_curves` (PPO vs DQN).
 - [x] `evaluate` (crash/on-road/overtakes/return/length) + `plot_eval_comparison` bar chart.
