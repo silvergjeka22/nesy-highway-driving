@@ -19,6 +19,8 @@ eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 # ---- Compute + logging (shared by all trainers) ------------------------------
 device: cuda          # use the Colab T4 GPU ('cuda'); falls back to CPU if absent.
 print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
+n_envs: 8             # parallel training envs (SubprocVecEnv) — the model-free speedup.
+                      # Set to 1 to disable parallelism. Eval/video always run single-env.
 
 # ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:

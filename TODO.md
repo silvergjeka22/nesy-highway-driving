@@ -15,6 +15,11 @@ fully functional; Parts 3 & 4 are scaffolded with explicit open items.
 - [x] `evaluate` (crash/on-road/overtakes/return/length) + `plot_eval_comparison` bar chart.
 - [x] `record_video` / `record_random_video` save a **clean MP4** (H.264 + yuv420p, frames padded to
       a multiple of 16 — no imageio `macro_block_size` warning). → `part1_best.mp4`.
+- [x] **Live training UX**: streaming progress prints (`ep_rew_mean`, steps/s, ETA, first-episode),
+      best-by-reward checkpointing, GPU `device` knob, and **`n_envs` parallel envs (`SubprocVecEnv`)**
+      for a model-free speedup (~3× on multi-core). Best Part-1 model is PPO, picked directly.
+- [x] **Kernel-safe video**: `record_video_safe` renders in a subprocess so a pygame/SDL segfault on
+      headless Colab can't crash the kernel; `_ensure_render_backend` provides a headless display.
 
 ### Part 2 — NeSy + XAI (highway-env)
 - [x] **Step A** predicates (`nesy/roadmap.py::predicates`) on the SI scene.

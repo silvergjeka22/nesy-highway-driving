@@ -18,10 +18,35 @@ import numpy as np  # noqa: E402
 from stable_baselines3 import PPO, DQN  # noqa: E402
 from stable_baselines3.common.logger import configure  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
+from stable_baselines3.common.env_util import make_vec_env  # noqa: E402
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv  # noqa: E402
 
 from envs.highway_factory import make_env  # noqa: E402
 
 _ALGOS = {"ppo": PPO, "dqn": DQN}
+
+
+def _train_env(cfg, fast=False, logic_reward=False, seed=None):
+    """Build the training env: ``cfg['n_envs']`` parallel highway-envs in a
+    ``SubprocVecEnv`` (the model-free speedup — many envs step at once across CPU
+    cores) when ``n_envs > 1``, else a single env. Eval and video stay single-env.
+
+    Falls back to ``DummyVecEnv`` (sequential, same API) if subprocesses can't
+    start on the platform. Each sub-env is Monitor-wrapped by ``make_vec_env`` so
+    ``ep_rew_mean`` / curves still work.
+    """
+    n_envs = int(cfg.get("n_envs", 1))
+    if n_envs <= 1:
+        return make_env(cfg, render=False, fast=fast, seed=seed, logic_reward=logic_reward)
+
+    def _factory():
+        return make_env(cfg, render=False, fast=fast, logic_reward=logic_reward)
+
+    try:
+        return make_vec_env(_factory, n_envs=n_envs, seed=seed, vec_env_cls=SubprocVecEnv)
+    except Exception as e:  # pragma: no cover - platform dependent
+        print(f"  (SubprocVecEnv unavailable: {e}; using DummyVecEnv)", flush=True)
+        return make_vec_env(_factory, n_envs=n_envs, seed=seed, vec_env_cls=DummyVecEnv)
 
 
 class _ProgressPrinter(BaseCallback):
@@ -52,7 +77,7 @@ class _ProgressPrinter(BaseCallback):
         elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
         sps = self.num_timesteps / elapsed
         if self.total_steps:
-            eta = (self.total_steps - self.num_timesteps) / max(sps, 1e-6)
+            eta = max(0.0, (self.total_steps - self.num_timesteps) / max(sps, 1e-6))
             return f" | {sps:4.0f} steps/s | ETA {eta/60:4.1f} min"
         return f" | {sps:4.0f} steps/s"
 
@@ -140,7 +165,7 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     """Train the PPO baseline (recommended) and checkpoint it to Drive."""
     set_global_seeds(cfg["seed"])
     p = cfg["ppo"]
-    env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast)
+    env = _train_env(cfg, fast=fast, seed=cfg["seed"])
 
     device = _resolve_device(cfg)
 
@@ -158,7 +183,7 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
     pf = p.get("print_freq", cfg.get("print_freq", 500))
     print(f"[PPO] training for {p['total_timesteps']} steps on device='{device}' "
-          f"(printing every {pf} steps)…", flush=True)
+          f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
     printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=p["total_timesteps"])
     model.learn(total_timesteps=p["total_timesteps"], callback=printer)
 
@@ -176,7 +201,7 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     """Train the DQN baseline (second required baseline) and checkpoint it."""
     set_global_seeds(cfg["seed"])
     d = cfg["dqn"]
-    env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast)
+    env = _train_env(cfg, fast=fast, seed=cfg["seed"])
 
     device = _resolve_device(cfg)
     model = DQN(
@@ -194,7 +219,7 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
     pf = d.get("print_freq", cfg.get("print_freq", 500))
     print(f"[DQN] training for {d['total_timesteps']} steps on device='{device}' "
-          f"(printing every {pf} steps)…", flush=True)
+          f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
     printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=d["total_timesteps"])
     model.learn(total_timesteps=d["total_timesteps"], callback=printer)
 
