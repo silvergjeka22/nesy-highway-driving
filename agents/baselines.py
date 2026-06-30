@@ -11,6 +11,7 @@ from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
 
 silence_warnings()
 
+import os  # noqa: E402
 import time  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -58,20 +59,33 @@ class _ProgressPrinter(BaseCallback):
     **best (highest-reward)** policy seen, not just the final one.
     """
 
-    def __init__(self, tag, print_freq=500, best_path=None, total_steps=None):
+    def __init__(self, tag, print_freq=500, best_path=None, total_steps=None, curve_csv=None):
         super().__init__()
         self.tag = tag
         self.print_freq = max(1, int(print_freq))
         self.best_path = best_path
         self.total_steps = total_steps
+        self.curve_csv = curve_csv
         self.best_rew = -float("inf")
         self.saved_best = False
         self._first_done = False
+        self._curve_init = False
         self._t0 = None
         self._next = self.print_freq
 
     def _on_training_start(self):
         self._t0 = time.time()
+
+    def _log_curve(self, step, r, ln):
+        """Append one fine-grained curve point (every print_freq) for plotting."""
+        if not self.curve_csv:
+            return
+        mode = "w" if not self._curve_init else "a"
+        with open(self.curve_csv, mode) as f:
+            if not self._curve_init:
+                f.write("step,ep_rew_mean,ep_len_mean\n")
+                self._curve_init = True
+            f.write(f"{step},{r:.4f},{ln:.4f}\n")
 
     def _speed(self):
         elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
@@ -99,6 +113,7 @@ class _ProgressPrinter(BaseCallback):
                 extra = ""
                 if hasattr(self.model, "exploration_rate"):  # DQN
                     extra = f" | eps {self.model.exploration_rate:.3f}"
+                self._log_curve(self.num_timesteps, r, ln)
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
                     self.best_rew = r
@@ -184,7 +199,8 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     pf = p.get("print_freq", cfg.get("print_freq", 500))
     print(f"[PPO] training for {p['total_timesteps']} steps on device='{device}' "
           f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=p["total_timesteps"])
+    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=p["total_timesteps"],
+                               curve_csv=os.path.join(curve_dir(cfg, "ppo"), "curve.csv"))
     model.learn(total_timesteps=p["total_timesteps"], callback=printer)
 
     if printer.saved_best:
@@ -220,7 +236,8 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     pf = d.get("print_freq", cfg.get("print_freq", 500))
     print(f"[DQN] training for {d['total_timesteps']} steps on device='{device}' "
           f"with n_envs={cfg.get('n_envs', 1)} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=d["total_timesteps"])
+    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=d["total_timesteps"],
+                               curve_csv=os.path.join(curve_dir(cfg, "dqn"), "curve.csv"))
     model.learn(total_timesteps=d["total_timesteps"], callback=printer)
 
     if printer.saved_best:

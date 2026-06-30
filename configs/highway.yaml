@@ -73,7 +73,7 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 3000      # quick visible run (raise to ~200000 for a full baseline)
+  total_timesteps: 10000     # current run (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   n_steps: 512               # quick-run: smaller rollout = updates sooner (raise to 2048 for full)
   batch_size: 256
@@ -90,7 +90,7 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 3000      # quick visible run (raise to ~200000 for a full baseline)
+  total_timesteps: 10000     # current run (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   buffer_size: 50000
   learning_starts: 1000

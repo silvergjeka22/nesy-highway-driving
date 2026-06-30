@@ -191,12 +191,13 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
 # fresh process + fresh display, which also dodges the second-pygame-init crash.
 # =============================================================================
 def record_video_safe(model_path, algo, cfg_path, out_path,
-                      apply_shield=False, timeout=900):
-    """Render ``model_path``'s video in a child process. Returns the path or None.
+                      apply_shield=False, min_seconds=30, timeout=900):
+    """Render ``model_path``'s ~``min_seconds`` video in a child process.
 
-    The model must already be saved to ``model_path`` and the config readable at
-    ``cfg_path`` (both true in the notebooks). If the child segfaults or errors,
-    the kernel survives and this returns ``None``.
+    Returns the path on success, else None. Rendering in a subprocess means a
+    pygame/SDL segfault on headless Colab cannot crash the notebook kernel
+    ("Canceled future…"). The model must already be saved to ``model_path`` and
+    the config readable at ``cfg_path`` (both true in the notebooks).
     """
     import sys
     import subprocess
@@ -208,7 +209,8 @@ def record_video_safe(model_path, algo, cfg_path, out_path,
         "from eval.evaluate import record_video\n"
         f"cfg = load_config({cfg_path!r})\n"
         f"m = load_model({model_path!r}, {algo!r})\n"
-        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)})\n"
+        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
+        f"min_seconds={min_seconds!r})\n"
         "print('VIDEO_OK', p)\n"
     )
     try:
@@ -218,30 +220,56 @@ def record_video_safe(model_path, algo, cfg_path, out_path,
         return None
 
 
+def show_video(path, width=720):
+    """Return an IPython HTML5 ``<video>`` that embeds the MP4 inline (for Colab).
+
+    Base64-embeds the file so it plays in the notebook regardless of the Drive
+    path. Use in the last cell: ``show_video(drive_path(cfg,'videos','part1_best.mp4'))``.
+    """
+    import base64
+    from IPython.display import HTML
+
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return HTML(
+        f'<video controls autoplay loop width="{width}">'
+        f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
+        "</video>"
+    )
+
+
 # =============================================================================
 # Single-model video (Parts 1-3)
 # =============================================================================
 def record_video(model, cfg, path, n_episodes=None, seed=None,
-                 apply_shield=False, env_fn=None, scene_fn=None):
+                 apply_shield=False, env_fn=None, scene_fn=None, min_seconds=None):
     """Record an MP4 of the policy driving, saved to ``path``. Returns ``path``.
 
     Captures ``env.render()`` frames manually and writes them with imageio — this
-    works uniformly for highway-env and MetaDrive (no dependence on
-    ``RecordVideo``'s render-mode handling, which differs across simulators).
+    works uniformly for highway-env and MetaDrive.
+
+    ``min_seconds``: if set, keep playing episodes until the clip is at least this
+    long (≈ ``min_seconds × fps`` frames), capped at ``video_max_episodes`` — so a
+    short episode doesn't give a 2-second video. Otherwise plays ``n_episodes``.
     """
     from utils import save_mp4
     from nesy.roadmap import predicates, safety_shield
 
     n_episodes = n_episodes if n_episodes is not None else cfg["eval"].get("video_episodes", 1)
     seed = seed if seed is not None else cfg["eval_seeds"][0]
+    fps = cfg["eval"].get("video_fps", 10)
     env_fn = env_fn or (lambda c, render: make_env(c, render=render))
     scene_fn = scene_fn or read_scene
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
+    target_frames = int(min_seconds * fps) if min_seconds else None
+    max_episodes = int(cfg["eval"].get("video_max_episodes", 40))
+
     env = env_fn(cfg, True)
     frames = []
     try:
-        for ep in range(n_episodes):
+        ep = 0
+        while True:
             obs, _ = env.reset(seed=int(seed) + ep)
             fsm_state = cfg["fsm"]["initial_state"]
             done = False
@@ -255,10 +283,16 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
                 if frame is not None:
                     frames.append(np.asarray(frame))
                 done = terminated or truncated
+            ep += 1
+            if target_frames is not None:
+                if len(frames) >= target_frames or ep >= max_episodes:
+                    break
+            elif ep >= n_episodes:
+                break
     finally:
         env.close()
 
-    return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
+    return save_mp4(frames, path, fps=fps)
 
 
 def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):

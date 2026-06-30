@@ -19,16 +19,24 @@ from utils import curve_dir, drive_path
 # Part 1 — training curves (PPO vs DQN)
 # =============================================================================
 def load_curve(cfg, tag):
-    """Load one model's ``progress.csv`` (timesteps, ep_rew_mean, ep_len_mean)."""
-    csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
+    """Load one model's training curve (timesteps, ep_rew_mean, ep_len_mean).
+
+    Prefers the fine-grained ``curve.csv`` written every ``print_freq`` steps by
+    the progress callback (many points); falls back to SB3's per-rollout
+    ``progress.csv``.
+    """
+    d = curve_dir(cfg, tag)
+    fine = os.path.join(d, "curve.csv")
+    if os.path.exists(fine):
+        df = pd.read_csv(fine)
+        out = pd.DataFrame({"t": df["step"], "rew": df["ep_rew_mean"], "len": df["ep_len_mean"]})
+        return out.dropna(subset=["t"])
+
+    csv = os.path.join(d, "progress.csv")
     if not os.path.exists(csv):
         return None
     df = pd.read_csv(csv)
-    cols = {
-        "t": "time/total_timesteps",
-        "rew": "rollout/ep_rew_mean",
-        "len": "rollout/ep_len_mean",
-    }
+    cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean", "len": "rollout/ep_len_mean"}
     out = pd.DataFrame()
     for k, c in cols.items():
         out[k] = df[c] if c in df.columns else np.nan
