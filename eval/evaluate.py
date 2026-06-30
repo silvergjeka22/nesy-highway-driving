@@ -3,7 +3,10 @@
   * ``evaluate``            — metrics over held-out seeds, with optional safety
     shield, per-rule violation counting (independent MTL monitor), and an
     optional ≥``video_seconds`` clip of the same policy driving.
-  * ``record_video``        — MP4 of one model driving (Parts 1-3).
+  * ``record_video``        — MP4 of one model driving, in-process (Parts 1-3).
+  * ``record_video_safe``   — same, but rendered in a SUBPROCESS so a headless-
+    Colab pygame/SDL segfault can't crash the notebook kernel. ``evaluate`` uses
+    this when given the model's checkpoint path (the Colab-safe path).
   * ``record_random_video`` — short random-policy clip (the Part-1 env study).
   * ``show_video``          — embed an MP4 inline in the notebook.
   * ``select_nesy_method``  — rank the Part-2 NeSy configs (shield vs reward).
@@ -30,7 +33,8 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None, video_path=None, video_seconds=None):
+             env_fn=None, scene_fn=None, video_path=None, video_seconds=None,
+             video_model_path=None, video_algo=None, cfg_path="configs/highway.yaml"):
     """Evaluate ``model`` over held-out seeds and aggregate metrics.
 
     Args:
@@ -45,6 +49,12 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
             setting) to this path, at least ``video_seconds`` long, and return it
             under ``video``. Lets one call both score *and* show a model.
         video_seconds: minimum video length; defaults to ``cfg['eval']['video_seconds']``.
+        video_model_path, video_algo: if given (with ``video_path``), the clip is
+            rendered in a SUBPROCESS from this checkpoint — kernel-safe on headless
+            Colab (the in-process pygame renderer can segfault the notebook). This
+            is the path the notebooks use. Without them, falls back to in-process
+            ``record_video`` (fine locally).
+        cfg_path: config path the render subprocess reloads (default repo YAML).
 
     Returns:
         dict with ``summary`` (headline metrics + overtaking diagnostics, and
@@ -75,10 +85,18 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
 
     if video_path is not None:
         secs = video_seconds if video_seconds is not None else ec.get("video_seconds", 30)
-        result["video"] = record_video(
-            model, cfg, video_path, apply_shield=apply_shield,
-            env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
-        )
+        if video_model_path is not None:
+            # Kernel-safe: render from the checkpoint in a child process so a
+            # headless-Colab pygame/SDL segfault can't kill the notebook kernel.
+            result["video"] = record_video_safe(
+                video_model_path, video_algo, cfg_path, video_path,
+                apply_shield=apply_shield, min_seconds=secs,
+            )
+        else:
+            result["video"] = record_video(
+                model, cfg, video_path, apply_shield=apply_shield,
+                env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
+            )
     return result
 
 
@@ -221,7 +239,55 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
 
 
 # =============================================================================
-# Video (Parts 1-3)
+# Kernel-safe video: render in a SUBPROCESS so a pygame/SDL segfault on headless
+# Colab cannot crash the notebook kernel ("Canceled future…"). Each call gets a
+# fresh process + fresh display, which also dodges the second-pygame-init crash.
+# =============================================================================
+def record_video_safe(model_path, algo, cfg_path, out_path,
+                      apply_shield=False, min_seconds=30, timeout=900):
+    """Render ``model_path``'s ~``min_seconds`` video in a child process.
+
+    Returns the path on success, else None. Rendering in a subprocess means a
+    pygame/SDL segfault on headless Colab cannot crash the notebook kernel
+    ("Canceled future…"). The model must already be saved to ``model_path`` and
+    the config readable at ``cfg_path`` (both true in the notebooks).
+    """
+    import sys
+    import subprocess
+
+    # Anchor the child to the repo root so it never depends on the caller's cwd.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
+
+    code = (
+        f"import sys; sys.path.insert(0, {repo_root!r})\n"
+        "from utils import load_config\n"
+        "from agents.baselines import load_model\n"
+        "from eval.evaluate import record_video\n"
+        f"cfg = load_config({cfg_abs!r})\n"
+        f"m = load_model({model_path!r}, {algo!r})\n"
+        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
+        f"min_seconds={min_seconds!r})\n"
+        "print('VIDEO_OK', p)\n"
+    )
+    try:
+        r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
+                           capture_output=True, text=True)
+    except Exception as e:
+        print("record_video_safe: could not start the render process:", repr(e))
+        return None
+    if r.returncode == 0:
+        return out_path
+    # Surface why the child failed (instead of a silent None).
+    print(f"record_video_safe: render failed (returncode={r.returncode}). Last output:")
+    tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]
+    for line in tail:
+        print("   ", line)
+    return None
+
+
+# =============================================================================
+# In-process video (used by the subprocess above, and locally)
 # =============================================================================
 def record_video(model, cfg, path, n_episodes=None, seed=None,
                  apply_shield=False, env_fn=None, scene_fn=None, min_seconds=None):
