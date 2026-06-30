@@ -11,12 +11,48 @@ from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
 
 silence_warnings()
 
+import numpy as np  # noqa: E402
+
 from stable_baselines3 import PPO, DQN  # noqa: E402
 from stable_baselines3.common.logger import configure  # noqa: E402
+from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 
 from envs.highway_factory import make_env  # noqa: E402
 
 _ALGOS = {"ppo": PPO, "dqn": DQN}
+
+
+class _ProgressPrinter(BaseCallback):
+    """Print a compact, labelled training line every ``print_freq`` steps.
+
+    Shows the running mean episode reward + length (from SB3's Monitor buffer) so
+    you can see at a glance that learning is progressing well. Complements the
+    full SB3 table written by the attached logger.
+    """
+
+    def __init__(self, tag, print_freq=2000):
+        super().__init__()
+        self.tag = tag
+        self.print_freq = max(1, int(print_freq))
+        self._next = self.print_freq
+
+    def _on_step(self):
+        if self.num_timesteps >= self._next:
+            self._next += self.print_freq
+            buf = list(self.model.ep_info_buffer or [])
+            if buf:
+                r = float(np.mean([e["r"] for e in buf]))
+                ln = float(np.mean([e["l"] for e in buf]))
+                extra = ""
+                if hasattr(self.model, "exploration_rate"):  # DQN
+                    extra = f" | eps {self.model.exploration_rate:.3f}"
+                print(f"[{self.tag}] step {self.num_timesteps:>7} | "
+                      f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f} | "
+                      f"episodes {len(buf)}{extra}", flush=True)
+            else:
+                print(f"[{self.tag}] step {self.num_timesteps:>7} | "
+                      f"collecting first episodes…", flush=True)
+        return True
 
 
 def _attach_logger(model, cfg, tag):
@@ -50,7 +86,10 @@ def train_ppo(cfg, drive_dir=None, fast=False):
         seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
     _attach_logger(model, cfg, "ppo")
-    model.learn(total_timesteps=p["total_timesteps"], progress_bar=True)
+    print(f"[PPO] training for {p['total_timesteps']} steps…", flush=True)
+    model.learn(total_timesteps=p["total_timesteps"], progress_bar=True,
+                callback=_ProgressPrinter("PPO", p.get("print_freq", 2000)))
+    print("[PPO] training done.", flush=True)
 
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
     model.save(path)
@@ -76,7 +115,10 @@ def train_dqn(cfg, drive_dir=None, fast=False):
         seed=cfg["seed"], verbose=d.get("verbose", 1),
     )
     _attach_logger(model, cfg, "dqn")
-    model.learn(total_timesteps=d["total_timesteps"], progress_bar=True)
+    print(f"[DQN] training for {d['total_timesteps']} steps…", flush=True)
+    model.learn(total_timesteps=d["total_timesteps"], progress_bar=True,
+                callback=_ProgressPrinter("DQN", d.get("print_freq", 2000)))
+    print("[DQN] training done.", flush=True)
 
     path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
     model.save(path)
