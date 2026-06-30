@@ -135,6 +135,57 @@ def _summarise(rows, count_violations):
 
 
 # =============================================================================
+# Part 2 (XAI) — rank the NeSy methods: shield vs reward-shaping vs both
+# =============================================================================
+def total_violation_rate(metrics):
+    """Sum of the independent monitor's per-rule violation rates (lower better)."""
+    rv = metrics["summary"].get("rule_violation_rate", {})
+    return float(sum(rv.values()))
+
+
+def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
+    """Pick the best logic-integration method, the XAI headline of Part 2.
+
+    Mirrors the lecture's *shielding vs reward-shaping* trade-off (slides 92-96):
+    shielding guarantees safety by pruning actions but can cost performance;
+    reward-shaping keeps performance but only *softly* enforces rules. So we do
+    not pick on violations alone — among configs that **keep driving**
+    (overtakes within ``select.within_return_pct`` of the baseline **and** crash
+    rate no worse than the baseline) we choose the **lowest total violation
+    rate**; ties break on higher overtakes.
+
+    Args:
+        metrics_by_name: ``{label: evaluate(...) dict}`` (must include the baseline).
+        baseline_key: the baseline label; defaults to the first key.
+
+    Returns:
+        ``(best_label, table)`` where ``table`` is a list of per-config rows
+        (overtakes, crash_rate, total_violation_rate, eligible) for display.
+    """
+    names = list(metrics_by_name)
+    baseline_key = baseline_key or names[0]
+    base = metrics_by_name[baseline_key]["summary"]
+    band = cfg.get("select", {}).get("within_return_pct", 0.10)
+    floor = base["overtakes"]["mean"] - abs(base["overtakes"]["mean"]) * band
+
+    table = []
+    for n in names:
+        s = metrics_by_name[n]["summary"]
+        eligible = (s["overtakes"]["mean"] >= floor) and (s["crash_rate"] <= base["crash_rate"] + 1e-9)
+        table.append({
+            "config": n,
+            "overtakes": round(s["overtakes"]["mean"], 3),
+            "crash_rate": round(s["crash_rate"], 3),
+            "total_violation_rate": round(total_violation_rate(metrics_by_name[n]), 4),
+            "eligible": bool(eligible),
+        })
+
+    pool = [r for r in table if r["eligible"]] or table
+    best = min(pool, key=lambda r: (r["total_violation_rate"], -r["overtakes"]))
+    return best["config"], table
+
+
+# =============================================================================
 # Single-model video (Parts 1-3)
 # =============================================================================
 def record_video(model, cfg, path, n_episodes=None, seed=None,
@@ -145,7 +196,7 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
     works uniformly for highway-env and MetaDrive (no dependence on
     ``RecordVideo``'s render-mode handling, which differs across simulators).
     """
-    import imageio
+    from utils import save_mp4
     from nesy.roadmap import predicates, safety_shield
 
     n_episodes = n_episodes if n_episodes is not None else cfg["eval"].get("video_episodes", 1)
@@ -174,9 +225,7 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
     finally:
         env.close()
 
-    if frames:
-        imageio.mimsave(path, frames, fps=10)
-    return path
+    return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
 
 
 def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
@@ -184,7 +233,7 @@ def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
 
     Lets the reader see the task before any learning. Returns ``path``.
     """
-    import imageio
+    from utils import save_mp4
 
     seed = seed if seed is not None else cfg["eval_seeds"][0]
     n_steps = n_steps if n_steps is not None else cfg["env"]["config"].get("duration", 40)
@@ -205,8 +254,6 @@ def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
     finally:
         env.close()
 
-    if frames:
-        imageio.mimsave(path, frames, fps=10)
-    return path
+    return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
 
 # Part 4 (head-to-head race) lives in eval/race.py: race(), record_race_video().

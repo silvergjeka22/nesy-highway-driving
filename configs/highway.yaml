@@ -21,8 +21,7 @@ paths:
   drive_root: /content/drive/MyDrive/nesy-highway-driving
   checkpoints: checkpoints      # <root>/checkpoints/{ppo,dqn,ppo_nesy,md_ppo}.zip
   videos: videos                # <root>/videos/*.mp4
-  metrics: metrics              # <root>/metrics/*.json
-  tensorboard: tb               # <root>/tb/
+  metrics: metrics              # <root>/metrics/*.json (+ curves/<algo>/progress.csv, *.png)
 
 # =============================================================================
 # PART 1 — environment + baselines

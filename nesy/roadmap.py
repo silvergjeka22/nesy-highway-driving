@@ -14,7 +14,7 @@ Scene schema
         "lanes_count": int,
     }
 
-Rule parameters come from ``cfg['rules']`` (see nesy/RULES.md, traceable to
+Rule parameters come from ``cfg['rules']`` (see README.md §4, traceable to
 Maierhofer et al. 2020, Table II). No top-level execution.
 """
 
@@ -30,7 +30,7 @@ def predicates(scene, cfg):
     """Ground a scene into truth-valued (and a few float) predicates.
 
     Pure function: ``scene -> dict[str, bool|float]``. See module docstring for
-    the scene schema and nesy/RULES.md for the rule mapping.
+    the scene schema and README.md §4 for the rule mapping.
     """
     r = cfg["rules"]
     ego = scene["ego"]

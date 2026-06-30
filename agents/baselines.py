@@ -7,15 +7,28 @@ returns the model. No top-level execution — the notebooks orchestrate.
 """
 
 # Mute legacy-gym / pkg_resources warnings before SB3 imports its compat shim.
-from utils import silence_warnings, set_global_seeds, drive_path
+from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
 
 silence_warnings()
 
 from stable_baselines3 import PPO, DQN  # noqa: E402
+from stable_baselines3.common.logger import configure  # noqa: E402
 
 from envs.highway_factory import make_env  # noqa: E402
 
 _ALGOS = {"ppo": PPO, "dqn": DQN}
+
+
+def _attach_logger(model, cfg, tag):
+    """Log training curves to ``metrics/curves/<tag>/`` (CSV + TensorBoard).
+
+    SB3 writes ``progress.csv`` with ``rollout/ep_rew_mean`` and
+    ``rollout/ep_len_mean`` vs ``time/total_timesteps`` there, so the notebooks
+    can plot PPO-vs-DQN training curves with ``eval.plots.plot_training_curves``.
+    """
+    folder = curve_dir(cfg, tag)
+    model.set_logger(configure(folder, ["stdout", "csv", "tensorboard"]))
+    return folder
 
 
 # =============================================================================
@@ -33,9 +46,10 @@ def train_ppo(cfg, drive_dir=None, fast=False):
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p["ent_coef"], vf_coef=p["vf_coef"], max_grad_norm=p["max_grad_norm"],
-        policy_kwargs=p.get("policy_kwargs"), tensorboard_log=_tb_dir(cfg),
+        policy_kwargs=p.get("policy_kwargs"),
         seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
+    _attach_logger(model, cfg, "ppo")
     model.learn(total_timesteps=p["total_timesteps"], progress_bar=True)
 
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
@@ -58,9 +72,10 @@ def train_dqn(cfg, drive_dir=None, fast=False):
         target_update_interval=d["target_update_interval"],
         exploration_fraction=d["exploration_fraction"],
         exploration_final_eps=d["exploration_final_eps"],
-        policy_kwargs=d.get("policy_kwargs"), tensorboard_log=_tb_dir(cfg),
+        policy_kwargs=d.get("policy_kwargs"),
         seed=cfg["seed"], verbose=d.get("verbose", 1),
     )
+    _attach_logger(model, cfg, "dqn")
     model.learn(total_timesteps=d["total_timesteps"], progress_bar=True)
 
     path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
@@ -124,6 +139,7 @@ def finetune_logic_reward(model, cfg, drive_dir=None, fast=False):
     model.learning_rate = ft_lr
     model.lr_schedule = lambda _progress_remaining: ft_lr
 
+    _attach_logger(model, cfg, "part2_nesy")
     model.learn(total_timesteps=ft["total_timesteps"], progress_bar=True,
                 reset_num_timesteps=False)
 
@@ -150,18 +166,12 @@ def train_ppo_md(cfg, drive_dir=None):
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p.get("ent_coef", 0.0), policy_kwargs=p.get("policy_kwargs"),
-        tensorboard_log=_tb_dir(cfg), seed=cfg["seed"], verbose=p.get("verbose", 1),
+        seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
+    _attach_logger(model, cfg, "part3_metadrive")
     model.learn(total_timesteps=p["total_timesteps"], progress_bar=True)
 
     path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
     model.save(path)
     env.close()
     return model
-
-
-def _tb_dir(cfg):
-    try:
-        return drive_path(cfg, "tensorboard")
-    except KeyError:
-        return None

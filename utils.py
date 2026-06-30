@@ -7,7 +7,6 @@ the agents, the evaluation harness, and the Colab notebook.
 import os
 import json
 import random
-import copy
 
 import numpy as np
 import yaml
@@ -50,21 +49,6 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def deep_update(base, overrides):
-    """Recursively merge ``overrides`` into a copy of ``base`` (non-mutating).
-
-    Lets the notebook tweak a few keys (e.g. a smaller ``total_timesteps`` for a
-    smoke test) without editing the YAML on disk.
-    """
-    out = copy.deepcopy(base)
-    for k, v in (overrides or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = deep_update(out[k], v)
-        else:
-            out[k] = copy.deepcopy(v)
-    return out
-
-
 def set_global_seeds(seed):
     """Seed Python, NumPy and (if available) PyTorch for reproducibility."""
     random.seed(seed)
@@ -91,6 +75,56 @@ def drive_path(cfg, key, *parts):
     sub = cfg["paths"][key]
     path = os.path.join(root, sub, *parts)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+def curve_dir(cfg, tag):
+    """Folder for a model's training-curve logs (CSV + TensorBoard).
+
+    ``<drive_root>/<metrics>/curves/<tag>/`` — created if missing. The SB3 logger
+    writes ``progress.csv`` here so the notebooks can plot PPO-vs-DQN curves.
+    """
+    d = os.path.join(cfg["paths"]["drive_root"], cfg["paths"]["metrics"], "curves", tag)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def save_mp4(frames, path, fps=10):
+    """Write RGB ``frames`` to an MP4 cleanly (no imageio resize warning).
+
+    Frames are padded (not resized) up to the next multiple of 16 and encoded
+    with H.264 + ``yuv420p`` so the file plays in any browser/QuickTime and the
+    "macro_block_size" warning never fires. Returns ``path``.
+    """
+    import imageio
+
+    if not frames:
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    arr = []
+    for f in frames:
+        f = np.asarray(f)
+        if f.ndim == 2:                      # greyscale -> RGB
+            f = np.stack([f] * 3, axis=-1)
+        if f.shape[2] == 4:                  # RGBA -> RGB
+            f = f[..., :3]
+        arr.append(f.astype(np.uint8))
+
+    h = max(f.shape[0] for f in arr)
+    w = max(f.shape[1] for f in arr)
+    H = ((h + 15) // 16) * 16
+    W = ((w + 15) // 16) * 16
+    padded = [
+        np.pad(f, ((0, H - f.shape[0]), (0, W - f.shape[1]), (0, 0)), mode="constant")
+        for f in arr
+    ]
+
+    imageio.mimsave(
+        path, padded, fps=fps, codec="libx264", quality=8,
+        macro_block_size=16, pixelformat="yuv420p",
+        output_params=["-loglevel", "error"],
+    )
     return path
 
 

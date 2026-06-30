@@ -63,7 +63,7 @@ pip install -q -U "numpy>=2.0,<3"
 
 # 3. Create Drive results folders (mirrors paths in configs/highway.yaml).
 echo "==> Creating Drive results folders."
-for sub in checkpoints videos metrics tb; do
+for sub in checkpoints videos metrics metrics/curves; do
   mkdir -p "$DRIVE_ROOT/$sub"
 done
 

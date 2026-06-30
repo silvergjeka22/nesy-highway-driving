@@ -10,7 +10,7 @@ finishing progress with crash + per-rule-violation metrics.
 Function-only. Multi-agent MetaDrive (MARL) is the Tier-2 stretch and is left as
 a TODO in ``make_race_env``.
 
-Public API (matches IMPLEMENTATION_PLAN.md §4.4):
+Public API (see README.md, Part 4):
     make_race_env(cfg, n_agents=2, render=False) -> env
     race(model_a, model_b, cfg, seeds=None)      -> race_metrics
     record_race_video(model_a, model_b, cfg, path) -> path
@@ -115,7 +115,7 @@ def record_race_video(model_a, model_b, cfg, path, seed=None):
     shield. (For a two-pane comparison instead, render two single-agent envs and
     hstack the frames.)
     """
-    import imageio
+    from utils import save_mp4
     from nesy.roadmap import predicates, safety_shield
 
     rc = cfg["race"]
@@ -144,9 +144,7 @@ def record_race_video(model_a, model_b, cfg, path, seed=None):
     finally:
         env.close()
 
-    if frames:
-        imageio.mimsave(path, frames, fps=10)
-    return path
+    return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
 
 
 # ---- helpers ----------------------------------------------------------------
