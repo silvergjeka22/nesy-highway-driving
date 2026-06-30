@@ -18,7 +18,7 @@ eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
 # ---- Compute + logging (shared by all trainers) ------------------------------
 device: cuda          # use the Colab T4 GPU ('cuda'); falls back to CPU if absent.
-print_freq: 500       # progress print every N steps (ep_rew_mean, best-checkpoint).
+print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
 
 # ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:
@@ -44,12 +44,12 @@ env:
     action:
       type: DiscreteMetaAction
     lanes_count: 4
-    vehicles_count: 50
+    vehicles_count: 25        # quick-run: fewer NPCs = faster stepping (raise to ~50 for full)
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
     policy_frequency: 1
-    simulation_frequency: 15
+    simulation_frequency: 10   # quick-run: fewer physics substeps/step (raise to 15 for full)
     collision_reward: -1.0
     right_lane_reward: 0.1
     high_speed_reward: 0.4
@@ -71,9 +71,9 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 10000     # quick run for now (raise to ~200000 for a full baseline)
+  total_timesteps: 3000      # quick visible run (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
-  n_steps: 2048
+  n_steps: 512               # quick-run: smaller rollout = updates sooner (raise to 2048 for full)
   batch_size: 256
   n_epochs: 10
   gamma: 0.95
@@ -88,7 +88,7 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 10000     # quick run for now (raise to ~200000 for a full baseline)
+  total_timesteps: 3000      # quick visible run (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   buffer_size: 50000
   learning_starts: 1000

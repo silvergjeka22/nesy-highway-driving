@@ -11,6 +11,8 @@ from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
 
 silence_warnings()
 
+import time  # noqa: E402
+
 import numpy as np  # noqa: E402
 
 from stable_baselines3 import PPO, DQN  # noqa: E402
@@ -31,15 +33,28 @@ class _ProgressPrinter(BaseCallback):
     **best (highest-reward)** policy seen, not just the final one.
     """
 
-    def __init__(self, tag, print_freq=500, best_path=None):
+    def __init__(self, tag, print_freq=500, best_path=None, total_steps=None):
         super().__init__()
         self.tag = tag
         self.print_freq = max(1, int(print_freq))
         self.best_path = best_path
+        self.total_steps = total_steps
         self.best_rew = -float("inf")
         self.saved_best = False
         self._first_done = False
+        self._t0 = None
         self._next = self.print_freq
+
+    def _on_training_start(self):
+        self._t0 = time.time()
+
+    def _speed(self):
+        elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
+        sps = self.num_timesteps / elapsed
+        if self.total_steps:
+            eta = (self.total_steps - self.num_timesteps) / max(sps, 1e-6)
+            return f" | {sps:4.0f} steps/s | ETA {eta/60:4.1f} min"
+        return f" | {sps:4.0f} steps/s"
 
     def _on_step(self):
         # Early signal: print as soon as the very first episode completes, so you
@@ -48,7 +63,7 @@ class _ProgressPrinter(BaseCallback):
             self._first_done = True
             e = list(self.model.ep_info_buffer)[-1]
             print(f"[{self.tag}] step {self.num_timesteps:>7} | first episode done "
-                  f"| reward {float(e['r']):.2f} | length {int(e['l'])}", flush=True)
+                  f"| reward {float(e['r']):.2f} | length {int(e['l'])}{self._speed()}", flush=True)
 
         if self.num_timesteps >= self._next:
             self._next += self.print_freq
@@ -67,10 +82,10 @@ class _ProgressPrinter(BaseCallback):
                     flag = "  <- new best, saved"
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
                       f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f} | "
-                      f"episodes {len(buf)}{extra}{flag}", flush=True)
+                      f"episodes {len(buf)}{extra}{self._speed()}{flag}", flush=True)
             else:
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
-                      f"collecting first episodes…", flush=True)
+                      f"collecting first episodes…{self._speed()}", flush=True)
         return True
 
 
@@ -144,7 +159,7 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     pf = p.get("print_freq", cfg.get("print_freq", 500))
     print(f"[PPO] training for {p['total_timesteps']} steps on device='{device}' "
           f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("PPO", pf, best_path=path)
+    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=p["total_timesteps"])
     model.learn(total_timesteps=p["total_timesteps"], callback=printer)
 
     if printer.saved_best:
@@ -180,7 +195,7 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     pf = d.get("print_freq", cfg.get("print_freq", 500))
     print(f"[DQN] training for {d['total_timesteps']} steps on device='{device}' "
           f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("DQN", pf, best_path=path)
+    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=d["total_timesteps"])
     model.learn(total_timesteps=d["total_timesteps"], callback=printer)
 
     if printer.saved_best:
@@ -254,7 +269,7 @@ def finetune_logic_reward(model, cfg, drive_dir=None, fast=False):
     pf = ft.get("print_freq", cfg.get("print_freq", 500))
     print(f"[NESY-FT] fine-tuning for {ft['total_timesteps']} steps on "
           f"device='{model.device}' (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("NESY-FT", pf, best_path=path)
+    printer = _ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=ft["total_timesteps"])
     model.learn(total_timesteps=ft["total_timesteps"], callback=printer,
                 reset_num_timesteps=False)
 
@@ -293,7 +308,7 @@ def train_ppo_md(cfg, drive_dir=None):
     pf = p.get("print_freq", cfg.get("print_freq", 500))
     print(f"[MD-PPO] training for {p['total_timesteps']} steps on device='{device}' "
           f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("MD-PPO", pf, best_path=path)
+    printer = _ProgressPrinter("MD-PPO", pf, best_path=path, total_steps=p["total_timesteps"])
     model.learn(total_timesteps=p["total_timesteps"], callback=printer)
 
     if printer.saved_best:
