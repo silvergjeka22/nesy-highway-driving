@@ -16,6 +16,10 @@
 seed: 42
 eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
+# ---- Compute + logging (shared by all trainers) ------------------------------
+device: cuda          # use the Colab T4 GPU ('cuda'); falls back to CPU if absent.
+print_freq: 500       # progress print every N steps (ep_rew_mean, best-checkpoint).
+
 # ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:
   drive_root: /content/drive/MyDrive/nesy-highway-driving
@@ -67,7 +71,7 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 200000
+  total_timesteps: 10000     # quick run for now (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   n_steps: 2048
   batch_size: 256
@@ -84,7 +88,7 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 200000
+  total_timesteps: 10000     # quick run for now (raise to ~200000 for a full baseline)
   learning_rate: 0.0005
   buffer_size: 50000
   learning_starts: 1000
@@ -168,7 +172,7 @@ fsm:
 # Warm-start fine-tune for the logic-shaped reward (Step C). Lower LR, fewer
 # steps than Part 1 — the genuine "fine-tune".
 finetune:
-  total_timesteps: 60000
+  total_timesteps: 5000      # quick run for now (raise to ~60000 for a full fine-tune)
   learning_rate: 0.0001
 
 # =============================================================================

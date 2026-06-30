@@ -23,17 +23,21 @@ _ALGOS = {"ppo": PPO, "dqn": DQN}
 
 
 class _ProgressPrinter(BaseCallback):
-    """Print a compact, labelled training line every ``print_freq`` steps.
+    """Print a training line every ``print_freq`` steps AND save the best model.
 
     Shows the running mean episode reward + length (from SB3's Monitor buffer) so
-    you can see at a glance that learning is progressing well. Complements the
-    full SB3 table written by the attached logger.
+    you can watch learning progress, and whenever the mean reward improves it
+    checkpoints the model to ``best_path`` — so the saved checkpoint is the
+    **best (highest-reward)** policy seen, not just the final one.
     """
 
-    def __init__(self, tag, print_freq=2000):
+    def __init__(self, tag, print_freq=500, best_path=None):
         super().__init__()
         self.tag = tag
         self.print_freq = max(1, int(print_freq))
+        self.best_path = best_path
+        self.best_rew = -float("inf")
+        self.saved_best = False
         self._next = self.print_freq
 
     def _on_step(self):
@@ -46,13 +50,51 @@ class _ProgressPrinter(BaseCallback):
                 extra = ""
                 if hasattr(self.model, "exploration_rate"):  # DQN
                     extra = f" | eps {self.model.exploration_rate:.3f}"
+                flag = ""
+                if self.best_path is not None and r > self.best_rew:
+                    self.best_rew = r
+                    self.model.save(self.best_path)
+                    self.saved_best = True
+                    flag = "  <- new best, saved"
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
                       f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f} | "
-                      f"episodes {len(buf)}{extra}", flush=True)
+                      f"episodes {len(buf)}{extra}{flag}", flush=True)
             else:
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
                       f"collecting first episodes…", flush=True)
         return True
+
+
+def _resolve_device(cfg):
+    """Resolve the requested device, falling back to CPU if CUDA is absent.
+
+    ``cfg['device']`` may be ``cuda`` (use the GPU — e.g. Colab T4), ``cpu``, or
+    ``auto`` (let SB3 decide). On free Colab with a T4, ``cuda`` puts the policy
+    on the GPU.
+    """
+    want = str(cfg.get("device", "auto")).lower()
+    try:
+        import torch
+        has_cuda = torch.cuda.is_available()
+    except Exception:
+        has_cuda = False
+    if want in ("cuda", "gpu"):
+        return "cuda" if has_cuda else "cpu"
+    return want
+
+
+def _to_device(model, cfg):
+    """Move an already-loaded SB3 model to the resolved device (for fine-tuning)."""
+    dev = _resolve_device(cfg)
+    if dev == "auto":
+        return model
+    try:
+        import torch
+        model.device = torch.device(dev)
+        model.policy.to(dev)
+    except Exception:
+        pass
+    return model
 
 
 def _attach_logger(model, cfg, tag):
@@ -76,23 +118,30 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     p = cfg["ppo"]
     env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast)
 
+    device = _resolve_device(cfg)
     model = PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p["ent_coef"], vf_coef=p["vf_coef"], max_grad_norm=p["max_grad_norm"],
-        policy_kwargs=p.get("policy_kwargs"),
+        policy_kwargs=p.get("policy_kwargs"), device=device,
         seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
     _attach_logger(model, cfg, "ppo")
-    print(f"[PPO] training for {p['total_timesteps']} steps…", flush=True)
-    model.learn(total_timesteps=p["total_timesteps"], progress_bar=True,
-                callback=_ProgressPrinter("PPO", p.get("print_freq", 2000)))
-    print("[PPO] training done.", flush=True)
-
     path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
-    model.save(path)
+    pf = p.get("print_freq", cfg.get("print_freq", 500))
+    print(f"[PPO] training for {p['total_timesteps']} steps on device='{device}' "
+          f"(printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("PPO", pf, best_path=path)
+    model.learn(total_timesteps=p["total_timesteps"], callback=printer)
+
+    if printer.saved_best:
+        print(f"[PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        model = PPO.load(path)
+    else:
+        model.save(path)
+        print(f"[PPO] done. saved final model -> {path}", flush=True)
     env.close()
     return model
 
@@ -103,6 +152,7 @@ def train_dqn(cfg, drive_dir=None, fast=False):
     d = cfg["dqn"]
     env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast)
 
+    device = _resolve_device(cfg)
     model = DQN(
         d["policy"], env,
         learning_rate=d["learning_rate"], buffer_size=d["buffer_size"],
@@ -111,17 +161,23 @@ def train_dqn(cfg, drive_dir=None, fast=False):
         target_update_interval=d["target_update_interval"],
         exploration_fraction=d["exploration_fraction"],
         exploration_final_eps=d["exploration_final_eps"],
-        policy_kwargs=d.get("policy_kwargs"),
+        policy_kwargs=d.get("policy_kwargs"), device=device,
         seed=cfg["seed"], verbose=d.get("verbose", 1),
     )
     _attach_logger(model, cfg, "dqn")
-    print(f"[DQN] training for {d['total_timesteps']} steps…", flush=True)
-    model.learn(total_timesteps=d["total_timesteps"], progress_bar=True,
-                callback=_ProgressPrinter("DQN", d.get("print_freq", 2000)))
-    print("[DQN] training done.", flush=True)
-
     path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
-    model.save(path)
+    pf = d.get("print_freq", cfg.get("print_freq", 500))
+    print(f"[DQN] training for {d['total_timesteps']} steps on device='{device}' "
+          f"(printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("DQN", pf, best_path=path)
+    model.learn(total_timesteps=d["total_timesteps"], callback=printer)
+
+    if printer.saved_best:
+        print(f"[DQN] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        model = DQN.load(path)
+    else:
+        model.save(path)
+        print(f"[DQN] done. saved final model -> {path}", flush=True)
     env.close()
     return model
 
@@ -176,17 +232,27 @@ def finetune_logic_reward(model, cfg, drive_dir=None, fast=False):
     env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast, logic_reward=True)
 
     model.set_env(env)
+    _to_device(model, cfg)
     # Lower, constant learning rate for the fine-tune.
     ft_lr = ft["learning_rate"]
     model.learning_rate = ft_lr
     model.lr_schedule = lambda _progress_remaining: ft_lr
 
     _attach_logger(model, cfg, "part2_nesy")
-    model.learn(total_timesteps=ft["total_timesteps"], progress_bar=True,
+    path = drive_dir or drive_path(cfg, "checkpoints", "part2_nesy.zip")
+    pf = ft.get("print_freq", cfg.get("print_freq", 500))
+    print(f"[NESY-FT] fine-tuning for {ft['total_timesteps']} steps on "
+          f"device='{model.device}' (printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("NESY-FT", pf, best_path=path)
+    model.learn(total_timesteps=ft["total_timesteps"], callback=printer,
                 reset_num_timesteps=False)
 
-    path = drive_dir or drive_path(cfg, "checkpoints", "part2_nesy.zip")
-    model.save(path)
+    if printer.saved_best:
+        print(f"[NESY-FT] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        model = type(model).load(path)
+    else:
+        model.save(path)
+        print(f"[NESY-FT] done. saved final model -> {path}", flush=True)
     env.close()
     return model
 
@@ -202,18 +268,28 @@ def train_ppo_md(cfg, drive_dir=None):
     p = cfg["metadrive"]["ppo"]
     env = make_env_md(cfg, render=False, seed=cfg["seed"])
 
+    device = _resolve_device(cfg)
     model = PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p.get("ent_coef", 0.0), policy_kwargs=p.get("policy_kwargs"),
-        seed=cfg["seed"], verbose=p.get("verbose", 1),
+        device=device, seed=cfg["seed"], verbose=p.get("verbose", 1),
     )
     _attach_logger(model, cfg, "part3_metadrive")
-    model.learn(total_timesteps=p["total_timesteps"], progress_bar=True)
-
     path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
-    model.save(path)
+    pf = p.get("print_freq", cfg.get("print_freq", 500))
+    print(f"[MD-PPO] training for {p['total_timesteps']} steps on device='{device}' "
+          f"(printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("MD-PPO", pf, best_path=path)
+    model.learn(total_timesteps=p["total_timesteps"], callback=printer)
+
+    if printer.saved_best:
+        print(f"[MD-PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        model = PPO.load(path)
+    else:
+        model.save(path)
+        print(f"[MD-PPO] done. saved final model -> {path}", flush=True)
     env.close()
     return model
