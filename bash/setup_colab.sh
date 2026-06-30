@@ -55,11 +55,11 @@ apt-get -qq install -y xvfb >/dev/null 2>&1 || true
 echo "==> Installing requirements."
 pip install -q -r "$WORKDIR/requirements.txt"
 
-# Colab's pre-installed C-extensions (pandas, scipy, matplotlib) are built against
-# NumPy 2.x. Make sure nothing in the resolve above left a NumPy 1.x behind, or the
-# kernel throws "numpy.dtype size changed ... Expected 96 ... got 88" on import.
-echo "==> Enforcing a NumPy 2.x build."
-pip install -q -U "numpy>=2.0,<3"
+# Colab's SciPy/pandas are built for its stock NumPy (2.0.x). Keep NumPy in the
+# compatible range WITHOUT -U (never bump Colab's stock build): <2.0 breaks those
+# wheels ("dtype size changed"); >=2.3 breaks NumPy's own C-API ("_blas_supports_fpe").
+echo "==> Keeping NumPy in the SciPy-compatible range (>=2.0,<2.3)."
+pip install -q "numpy>=2.0,<2.3"
 
 # 3. Create Drive results folders (mirrors paths in configs/highway.yaml).
 echo "==> Creating Drive results folders."
