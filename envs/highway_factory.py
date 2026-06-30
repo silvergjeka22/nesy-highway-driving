@@ -24,6 +24,39 @@ import gymnasium as gym  # noqa: E402
 # highway_env must be imported so its envs register with gymnasium.
 import highway_env  # noqa: F401,E402
 
+import os  # noqa: E402
+
+_VIRTUAL_DISPLAY = None
+
+
+def _ensure_render_backend():
+    """Guarantee pygame has a usable video backend before any render env is built.
+
+    highway-env's renderer needs a real (offscreen) display; without one pygame
+    **segfaults the kernel** on Colab (the "Canceled future for execute_request"
+    crash). So, in order of preference:
+
+      1. a display is already active (``DISPLAY`` set by the setup cell) → use it;
+      2. else start our own headless **virtual display** (xvfb via
+         ``pyvirtualdisplay``) → gives real frames, and survives a kernel restart
+         where the setup cell's display was lost;
+      3. else fall back to SDL's ``dummy`` driver — frames may be blank, but the
+         kernel will not crash.
+    """
+    global _VIRTUAL_DISPLAY
+    import sys
+    if sys.platform != "linux":
+        return  # macOS/Windows have native video backends; no virtual display needed
+    if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
+        return
+    try:
+        from pyvirtualdisplay import Display
+
+        _VIRTUAL_DISPLAY = Display(visible=0, size=(1400, 900))
+        _VIRTUAL_DISPLAY.start()        # sets DISPLAY -> real offscreen X server
+    except Exception:
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+
 
 def make_env(cfg, render=False, seed=None, fast=False, logic_reward=False):
     """Build a configured, wrapped highway-env instance.
@@ -41,6 +74,9 @@ def make_env(cfg, render=False, seed=None, fast=False, logic_reward=False):
     """
     env_cfg = cfg["env"]
     env_id = env_cfg["fast_id"] if fast else env_cfg["id"]
+
+    if render:
+        _ensure_render_backend()
 
     env = gym.make(
         env_id,

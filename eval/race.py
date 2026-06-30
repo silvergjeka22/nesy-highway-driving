@@ -46,6 +46,10 @@ def make_race_env(cfg, n_agents=2, render=False):
     env_cfg["observation"] = {"type": "MultiAgentObservation", "observation_config": obs_cfg}
     env_cfg["action"] = {"type": "MultiAgentAction", "action_config": act_cfg}
 
+    if render:
+        from envs.highway_factory import _ensure_render_backend
+        _ensure_render_backend()
+
     env = gym.make(
         cfg["env"]["id"],
         render_mode="rgb_array" if render else None,

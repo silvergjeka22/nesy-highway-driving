@@ -49,9 +49,13 @@ fi
 # Scrub the token from the stored remote so it never persists in .git/config.
 git -C "$WORKDIR" remote set-url origin "$CLEAN_URL"
 
-# 2. Install dependencies (xvfb enables headless .mp4 rendering on Colab).
+# 2. Install dependencies (xvfb enables headless .mp4 rendering on Colab —
+#    without it, highway-env's pygame renderer segfaults the kernel during video).
 echo "==> Installing xvfb (headless rendering)."
-apt-get -qq install -y xvfb >/dev/null 2>&1 || true
+apt-get -qq update -y >/dev/null 2>&1 || true
+if ! apt-get -qq install -y xvfb >/dev/null 2>&1; then
+  echo "    WARNING: xvfb install failed — video rendering may produce blank frames." >&2
+fi
 echo "==> Installing requirements."
 pip install -q -r "$WORKDIR/requirements.txt"
 
