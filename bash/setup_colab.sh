@@ -65,6 +65,14 @@ pip install -q -r "$WORKDIR/requirements.txt"
 echo "==> Keeping NumPy in the SciPy-compatible range (>=2.0,<2.3)."
 pip install -q "numpy>=2.0,<2.3"
 
+# Colab preinstalls the legacy OpenAI 'gym'. This project uses Gymnasium only, but
+# stable-baselines3 still does a guarded `import gym` on load, and gym prints an
+# "unmaintained / no NumPy 2.0" notice straight to stderr that NO warnings filter
+# can suppress. Removing it kills the notice at the source — SB3 falls back to
+# gym=None cleanly (it never converts a legacy-gym env here).
+echo "==> Removing the unused legacy 'gym' (silences its stderr notice)."
+pip uninstall -y gym >/dev/null 2>&1 || true
+
 # 3. Create Drive results folders (mirrors paths in configs/highway.yaml).
 echo "==> Creating Drive results folders."
 for sub in checkpoints videos metrics metrics/curves; do
