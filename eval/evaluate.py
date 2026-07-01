@@ -80,16 +80,19 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
 
-        if apply_shield or count_violations:
-            scene = scene_fn(env)
-            preds = predicates(scene, cfg)
-            if apply_shield:
-                action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
-            if count_violations:
-                for k, v in rule_violations(preds, cfg).items():
-                    viol[k] += int(v)
+        # The shield decides from the CURRENT (pre-action) state.
+        if apply_shield:
+            preds = predicates(scene_fn(env), cfg)
+            action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
 
         obs, reward, terminated, truncated, info = env.step(action)
+
+        # The independent monitor audits the state the action LEADS TO — including the
+        # terminal/crash state, where abrupt braking (RG2) and near-stall (RI1)
+        # concentrate. Counting the pre-action state instead would miss them.
+        if count_violations:
+            for k, v in rule_violations(predicates(scene_fn(env), cfg), cfg).items():
+                viol[k] += int(v)
         ret += float(reward)
         native_ret += float(info.get("native_reward", reward))
         steps += 1
