@@ -15,9 +15,17 @@ No top-level execution — the notebooks call the functions.
 """
 
 import os
+import sys
 
 import numpy as np
 import gymnasium as gym
+
+# pygame (pulled in by highway_env) optimistically imports the deprecated
+# ``pkg_resources`` at import time, which emits noisy setuptools DeprecationWarnings
+# (incl. declare_namespace) on newer setuptools/Colab. pygame falls back to a built-in
+# stub when that import fails, and only uses it for bundled fonts/icons that rgb_array
+# rendering never needs — so block the import at the source before highway_env loads.
+sys.modules.setdefault("pkg_resources", None)
 
 # highway_env must be imported so its envs register with gymnasium.
 import highway_env  # noqa: F401
