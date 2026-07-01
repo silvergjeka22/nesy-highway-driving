@@ -1,22 +1,17 @@
-# Base stack — installed by bash/setup_colab.sh for all three notebooks.
-# (MetaDrive is heavy and only needed for colab_3; install it there separately:
-#   pip install metadrive-simulator)
+# Libraries for the highway-env notebooks (Parts 1, 2, 4), installed by
+# bash/setup_colab.sh. Part 3 also needs MetaDrive — install it there separately:
+#   pip install metadrive-simulator
 
 highway-env>=1.8.2
 gymnasium>=0.29.1
 stable-baselines3>=2.3.0
-sb3-contrib>=2.3.0          # reserved (e.g. maskable PPO as a shield variant)
 torch>=2.1.0
 numpy>=2.0,<2.3            # match Colab's stock NumPy 2.0.x: <2.0 breaks SciPy's
                            # NumPy-2 wheels ("dtype size changed"); >=2.3 breaks the
                            # C-API Colab's SciPy was built against ("_blas_supports_fpe").
 pyyaml>=6.0
-moviepy>=1.0.3            # video encoding for record_video()
 imageio>=2.31
-imageio-ffmpeg>=0.4.9
+imageio-ffmpeg>=0.4.9     # H.264 encoding for record_video()
 pandas>=2.0              # metric tables in the notebooks
-matplotlib>=3.7          # rendering frames inline (env study)
+matplotlib>=3.7          # plots + rendering frames inline
 pyvirtualdisplay>=3.0    # headless rendering for .mp4 capture (needs apt xvfb)
-tensorboard>=2.14
-tqdm>=4.66
-rich>=13.0               # required by SB3 model.learn(progress_bar=True)

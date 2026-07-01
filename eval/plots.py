@@ -19,20 +19,12 @@ from utils import curve_dir, drive_path
 # Part 1 — training curves (PPO vs DQN)
 # =============================================================================
 def load_curve(cfg, tag):
-    """Load one model's training curve (timesteps, ep_rew_mean, ep_len_mean).
+    """Load one model's training curve from SB3's ``progress.csv``.
 
-    Prefers the fine-grained ``curve.csv`` written every ``print_freq`` steps by
-    the progress callback (many points); falls back to SB3's per-rollout
-    ``progress.csv``.
+    Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean) and
+    ``len`` (ep_len_mean), or ``None`` if the log is missing.
     """
-    d = curve_dir(cfg, tag)
-    fine = os.path.join(d, "curve.csv")
-    if os.path.exists(fine):
-        df = pd.read_csv(fine)
-        out = pd.DataFrame({"t": df["step"], "rew": df["ep_rew_mean"], "len": df["ep_len_mean"]})
-        return out.dropna(subset=["t"])
-
-    csv = os.path.join(d, "progress.csv")
+    csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
         return None
     df = pd.read_csv(csv)

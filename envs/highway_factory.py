@@ -1,85 +1,72 @@
 """highway-env construction + scene adapter + reward wrappers (Parts 1-2).
 
-Public entry points:
-  * ``make_env(cfg, render, seed, fast, logic_reward)`` — build the wrapped env.
-  * ``read_scene(env)`` — extract the SI-unit scene dict the NeSy predicates use
-    (the same schema MetaDrive's adapter emits, so predicates are reused as-is).
+Public functions:
+  * ``create_environment(cfg, render, seed, logic_reward)`` — build the wrapped env.
+  * ``read_scene(env)`` — SI-unit scene dict used by the NeSy predicates (Part 2).
+
+``make_env`` is kept as an alias of ``create_environment`` for Parts 2-4.
 
 Wrappers (in order):
-  * ``OvertakeCounter``     — instrumentation: info['overtakes'], info['is_offroad'].
-  * ``RewardShapingWrapper``— Part-1 light shaping (overtake bonus, off-road pen).
-  * ``LogicRewardWrapper``  — Part-2 Step C: subtract ``logic_penalty(preds)``.
+  * ``OvertakeCounter``      — instrumentation: info['overtakes'], info['is_offroad'].
+  * ``RewardShapingWrapper`` — Part-1 light shaping (overtake bonus, off-road pen).
+  * ``LogicRewardWrapper``   — Part-2 Step C: subtract ``logic_penalty(preds)``.
 
-No top-level execution — the notebooks call ``make_env``.
+No top-level execution — the notebooks call the functions.
 """
 
-# Mute pygame/pkg_resources/legacy-gym warnings before the heavy imports run.
-from utils import silence_warnings
+import os
 
-silence_warnings()
-
-import numpy as np  # noqa: E402
-import gymnasium as gym  # noqa: E402
+import numpy as np
+import gymnasium as gym
 
 # highway_env must be imported so its envs register with gymnasium.
-import highway_env  # noqa: F401,E402
-
-import os  # noqa: E402
+import highway_env  # noqa: F401
 
 _VIRTUAL_DISPLAY = None
 
 
 def _ensure_render_backend():
-    """Guarantee pygame has a usable video backend before any render env is built.
+    """Give pygame a usable video backend before building a render env.
 
-    highway-env's renderer needs a real (offscreen) display; without one pygame
-    **segfaults the kernel** on Colab (the "Canceled future for execute_request"
-    crash). So, in order of preference:
-
-      1. a display is already active (``DISPLAY`` set by the setup cell) → use it;
-      2. else start our own headless **virtual display** (xvfb via
-         ``pyvirtualdisplay``) → gives real frames, and survives a kernel restart
-         where the setup cell's display was lost;
-      3. else fall back to SDL's ``dummy`` driver — frames may be blank, but the
-         kernel will not crash.
+    On Linux (Colab/Kaggle) there is no screen, so highway-env's renderer needs an
+    offscreen display. If one is already set we use it; otherwise we start a
+    headless virtual display (xvfb via pyvirtualdisplay). macOS/Windows have a
+    native backend and need nothing.
     """
     global _VIRTUAL_DISPLAY
     import sys
     if sys.platform != "linux":
-        return  # macOS/Windows have native video backends; no virtual display needed
+        return
     if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
         return
     try:
         from pyvirtualdisplay import Display
 
         _VIRTUAL_DISPLAY = Display(visible=0, size=(1400, 900))
-        _VIRTUAL_DISPLAY.start()        # sets DISPLAY -> real offscreen X server
+        _VIRTUAL_DISPLAY.start()
     except Exception:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
-def make_env(cfg, render=False, seed=None, fast=False, logic_reward=False):
+def create_environment(cfg, render=False, seed=None, logic_reward=False):
     """Build a configured, wrapped highway-env instance.
 
     Args:
         cfg: full project config dict.
         render: if True, create with ``render_mode='rgb_array'`` (for video).
         seed: optional seed applied on the first reset.
-        fast: use ``highway-fast-v0`` for quick smoke tests.
-        logic_reward: if True, add the Part-2 ``LogicRewardWrapper`` (used by the
-            logic-shaped-reward fine-tune). Off for Part-1 baselines.
+        logic_reward: if True, add the Part-2 ``LogicRewardWrapper``. Off for Part 1.
 
     Returns:
         A Gymnasium env (constant-shape Kinematics obs, DiscreteMetaAction).
     """
     env_cfg = cfg["env"]
-    env_id = env_cfg["fast_id"] if fast else env_cfg["id"]
 
     if render:
         _ensure_render_backend()
 
     env = gym.make(
-        env_id,
+        env_cfg["id"],
         render_mode="rgb_array" if render else None,
         config=env_cfg["config"],
     )
@@ -100,6 +87,10 @@ def make_env(cfg, render=False, seed=None, fast=False, logic_reward=False):
     if seed is not None:
         env.reset(seed=int(seed))
     return env
+
+
+# Back-compat alias for Parts 2-4 (which import ``make_env``).
+make_env = create_environment
 
 
 def read_scene(env):

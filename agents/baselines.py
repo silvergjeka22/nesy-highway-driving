@@ -1,111 +1,81 @@
 """RL trainers: PPO/DQN baselines (Part 1), logic-reward fine-tune (Part 2),
 and continuous PPO on MetaDrive (Part 3).
 
-Function-only. Each trainer builds a fresh env from the same config, seeds
-everything, trains a stable-baselines3 model, saves a checkpoint to Drive, and
-returns the model. No top-level execution — the notebooks orchestrate.
+Function-only. Each trainer builds one plain env from the config, seeds
+everything, trains a stable-baselines3 model on the resolved device (CPU or
+GPU), saves the best-by-reward checkpoint, and returns the model. No top-level
+execution — the notebooks orchestrate.
 """
 
-# Mute legacy-gym / pkg_resources warnings before SB3 imports its compat shim.
-from utils import silence_warnings, set_global_seeds, drive_path, curve_dir
+import math
+import time
 
-silence_warnings()
+import numpy as np
 
-import os  # noqa: E402
-import math  # noqa: E402
-import time  # noqa: E402
+from stable_baselines3 import PPO, DQN
+from stable_baselines3.common.logger import configure
+from stable_baselines3.common.callbacks import BaseCallback
 
-import numpy as np  # noqa: E402
-
-from stable_baselines3 import PPO, DQN  # noqa: E402
-from stable_baselines3.common.logger import configure  # noqa: E402
-from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
-from stable_baselines3.common.env_util import make_vec_env  # noqa: E402
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv  # noqa: E402
-
-from envs.highway_factory import make_env  # noqa: E402
+from utils import set_global_seeds, drive_path, curve_dir
+from envs.highway_factory import create_environment
 
 _ALGOS = {"ppo": PPO, "dqn": DQN}
 
 
-def _train_env(cfg, fast=False, logic_reward=False, seed=None):
-    """Build the training env: ``cfg['n_envs']`` parallel highway-envs in a
-    ``SubprocVecEnv`` (the model-free speedup — many envs step at once across CPU
-    cores) when ``n_envs > 1``, else a single env. Eval and video stay single-env.
+def resolve_device(cfg):
+    """Return 'cuda' or 'cpu' so training works on both GPU and CPU machines.
 
-    Falls back to ``DummyVecEnv`` (sequential, same API) if subprocesses can't
-    start on the platform. Each sub-env is Monitor-wrapped by ``make_vec_env`` so
-    ``ep_rew_mean`` / curves still work.
+    ``cfg['device']`` may be ``auto``/``cuda``/``gpu`` (use the GPU when present,
+    else fall back to CPU) or ``cpu`` (force CPU).
     """
-    n_envs = int(cfg.get("n_envs", 1))
-    if n_envs <= 1:
-        return make_env(cfg, render=False, fast=fast, seed=seed, logic_reward=logic_reward)
-
-    def _factory():
-        return make_env(cfg, render=False, fast=fast, logic_reward=logic_reward)
-
+    want = str(cfg.get("device", "auto")).lower()
+    if want == "cpu":
+        return "cpu"
     try:
-        return make_vec_env(_factory, n_envs=n_envs, seed=seed, vec_env_cls=SubprocVecEnv)
-    except Exception as e:  # pragma: no cover - platform dependent
-        print(f"  (SubprocVecEnv unavailable: {e}; using DummyVecEnv)", flush=True)
-        return make_vec_env(_factory, n_envs=n_envs, seed=seed, vec_env_cls=DummyVecEnv)
+        import torch
+        has_cuda = torch.cuda.is_available()
+    except Exception:
+        has_cuda = False
+    return "cuda" if has_cuda else "cpu"
 
 
 class _ProgressPrinter(BaseCallback):
-    """Print a training line every ``print_freq`` steps AND save the best model.
+    """Print a training line every ``print_freq`` steps and save the best model.
 
     Shows the running mean episode reward + length (from SB3's Monitor buffer) so
-    you can watch learning progress, and whenever the mean reward improves it
-    checkpoints the model to ``best_path`` — so the saved checkpoint is the
-    **best (highest-reward)** policy seen, not just the final one.
+    you can watch learning, and whenever the mean reward improves it checkpoints
+    the model to ``best_path`` — so the saved checkpoint is the best (highest
+    reward) policy seen, not just the final one.
     """
 
-    def __init__(self, tag, print_freq=500, best_path=None, total_steps=None, curve_csv=None):
+    def __init__(self, tag, print_freq=200, best_path=None, total_steps=None):
         super().__init__()
         self.tag = tag
         self.print_freq = max(1, int(print_freq))
         self.best_path = best_path
         self.total_steps = total_steps
-        self.curve_csv = curve_csv
         self.best_rew = -float("inf")
         self.saved_best = False
         self._first_done = False
-        self._curve_init = False
         self._t0 = None
         self._start_step = 0
         self._next = self.print_freq
 
     def _on_training_start(self):
-        # Anchor progress to THIS call's starting step so the rate, ETA and print
-        # cadence are correct even for a warm-started fine-tune (where
-        # num_timesteps already carries the Part-1 step count).
         self._t0 = time.time()
         self._start_step = self.num_timesteps
         self._next = self.num_timesteps + self.print_freq
 
-    def _log_curve(self, step, r, ln):
-        """Append one fine-grained curve point (every print_freq) for plotting."""
-        if not self.curve_csv:
-            return
-        mode = "w" if not self._curve_init else "a"
-        with open(self.curve_csv, mode) as f:
-            if not self._curve_init:
-                f.write("step,ep_rew_mean,ep_len_mean\n")
-                self._curve_init = True
-            f.write(f"{step},{r:.4f},{ln:.4f}\n")
-
     def _speed(self):
         elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
-        done = max(self.num_timesteps - self._start_step, 0)   # steps in THIS session
+        done = max(self.num_timesteps - self._start_step, 0)
         sps = done / elapsed
         if self.total_steps:
             eta = max(0.0, (self.total_steps - self.num_timesteps) / max(sps, 1e-6))
-            return f" | {sps:4.0f} steps/s | ETA {eta/60:4.1f} min"
+            return f" | {sps:4.0f} steps/s | ETA {eta / 60:4.1f} min"
         return f" | {sps:4.0f} steps/s"
 
     def _on_step(self):
-        # Early signal: print as soon as the very first episode completes, so you
-        # see training is live well before the first `print_freq` checkpoint.
         if not self._first_done and (self.model.ep_info_buffer or []):
             self._first_done = True
             e = list(self.model.ep_info_buffer)[-1]
@@ -118,10 +88,7 @@ class _ProgressPrinter(BaseCallback):
             if buf:
                 r = float(np.mean([e["r"] for e in buf]))
                 ln = float(np.mean([e["l"] for e in buf]))
-                extra = ""
-                if hasattr(self.model, "exploration_rate"):  # DQN
-                    extra = f" | eps {self.model.exploration_rate:.3f}"
-                self._log_curve(self.num_timesteps, r, ln)
+                extra = f" | eps {self.model.exploration_rate:.3f}" if hasattr(self.model, "exploration_rate") else ""
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
                     self.best_rew = r
@@ -137,59 +104,24 @@ class _ProgressPrinter(BaseCallback):
         return True
 
 
-def _resolve_device(cfg):
-    """Resolve the requested device, falling back to CPU if CUDA is absent.
-
-    ``cfg['device']`` may be ``cuda`` (use the GPU — e.g. Colab T4), ``cpu``, or
-    ``auto`` (let SB3 decide). On free Colab with a T4, ``cuda`` puts the policy
-    on the GPU.
-    """
-    want = str(cfg.get("device", "auto")).lower()
-    try:
-        import torch
-        has_cuda = torch.cuda.is_available()
-    except Exception:
-        has_cuda = False
-    if want in ("cuda", "gpu"):
-        return "cuda" if has_cuda else "cpu"
-    return want
-
-
-def _to_device(model, cfg):
-    """Move an already-loaded SB3 model to the resolved device (for fine-tuning)."""
-    dev = _resolve_device(cfg)
-    if dev == "auto":
-        return model
-    try:
-        import torch
-        model.device = torch.device(dev)
-        model.policy.to(dev)
-    except Exception:
-        pass
-    return model
-
-
 def _attach_logger(model, cfg, tag):
-    """Log training curves to ``metrics/curves/<tag>/`` (CSV + TensorBoard).
+    """Log training curves to ``metrics/curves/<tag>/progress.csv`` (CSV only).
 
-    SB3 writes ``progress.csv`` with ``rollout/ep_rew_mean`` and
-    ``rollout/ep_len_mean`` vs ``time/total_timesteps`` there, so the notebooks
-    can plot PPO-vs-DQN training curves with ``eval.plots.plot_training_curves``.
+    SB3 writes ``rollout/ep_rew_mean`` and ``rollout/ep_len_mean`` vs
+    ``time/total_timesteps`` there, so ``eval.plots.plot_training_curves`` can plot
+    PPO vs DQN. CSV-only keeps the console output to the clean progress lines.
     """
     folder = curve_dir(cfg, tag)
-    model.set_logger(configure(folder, ["stdout", "csv", "tensorboard"]))
+    model.set_logger(configure(folder, ["csv"]))
     return folder
 
 
 def _effective_total(total_timesteps, rollout_steps):
-    """Round a step budget up to a whole number of rollouts.
+    """Round a step budget up to a whole rollout so the printed ETA ends at 0.
 
     SB3 only checks ``total_timesteps`` at rollout boundaries, so a run actually
-    stops at the next multiple of the rollout size — ``n_steps * n_envs`` for PPO,
-    ``train_freq * n_envs`` for DQN. Training to *that* number (and reporting it)
-    is what makes the printed ETA reach 0 exactly when training ends, instead of
-    hitting 0 early and overshooting (e.g. 1000 steps with 8 envs × 512 actually
-    runs 4096). Same actual run length either way; only the reported target moves.
+    stops at the next multiple of the rollout size (``n_steps`` for PPO,
+    ``train_freq`` for DQN). Training to that number keeps the ETA honest.
     """
     rollout_steps = max(1, int(rollout_steps))
     return math.ceil(total_timesteps / rollout_steps) * rollout_steps
@@ -198,36 +130,49 @@ def _effective_total(total_timesteps, rollout_steps):
 # =============================================================================
 # Part 1 — baselines on highway-env
 # =============================================================================
-def train_ppo(cfg, drive_dir=None, fast=False):
-    """Train the PPO baseline (recommended) and checkpoint it to Drive."""
-    set_global_seeds(cfg["seed"])
+def build_ppo(cfg, env, device=None):
+    """Construct the PPO model (on-policy policy-gradient) from the config."""
     p = cfg["ppo"]
-    env = _train_env(cfg, fast=fast, seed=cfg["seed"])
-
-    device = _resolve_device(cfg)
-
-    model = PPO(
+    return PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p["ent_coef"], vf_coef=p["vf_coef"], max_grad_norm=p["max_grad_norm"],
-        policy_kwargs=p.get("policy_kwargs"), device=device,
-        seed=cfg["seed"], verbose=p.get("verbose", 1),
+        policy_kwargs=p.get("policy_kwargs"), device=device or resolve_device(cfg),
+        seed=cfg["seed"], verbose=0,
     )
-    print("model ready")
+
+
+def build_dqn(cfg, env, device=None):
+    """Construct the DQN model (off-policy value-based) from the config."""
+    d = cfg["dqn"]
+    return DQN(
+        d["policy"], env,
+        learning_rate=d["learning_rate"], buffer_size=d["buffer_size"],
+        learning_starts=d["learning_starts"], batch_size=d["batch_size"],
+        gamma=d["gamma"], train_freq=d["train_freq"], gradient_steps=d["gradient_steps"],
+        target_update_interval=d["target_update_interval"],
+        exploration_fraction=d["exploration_fraction"],
+        exploration_final_eps=d["exploration_final_eps"],
+        policy_kwargs=d.get("policy_kwargs"), device=device or resolve_device(cfg),
+        seed=cfg["seed"], verbose=0,
+    )
+
+
+def train_ppo(cfg, path=None):
+    """Train the PPO baseline (recommended) and checkpoint the best to Drive."""
+    set_global_seeds(cfg["seed"])
+    device = resolve_device(cfg)
+    env = create_environment(cfg, seed=cfg["seed"])
+    model = build_ppo(cfg, env, device)
     _attach_logger(model, cfg, "ppo")
-    path = drive_dir or drive_path(cfg, "checkpoints", "ppo.zip")
-    pf = p.get("print_freq", cfg.get("print_freq", 500))
-    n_envs = max(1, int(cfg.get("n_envs", 1)))
-    # PPO collects n_steps per env before each update, so the run rounds up to the
-    # next multiple of n_steps*n_envs — train to that so the ETA ends at 0.
-    total = _effective_total(p["total_timesteps"], p["n_steps"] * n_envs)
-    rounded = f" (rounded up from {p['total_timesteps']})" if total != p["total_timesteps"] else ""
-    print(f"[PPO] training for {total} steps{rounded} on device='{device}' "
-          f"with n_envs={n_envs} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=total,
-                               curve_csv=os.path.join(curve_dir(cfg, "ppo"), "curve.csv"))
+
+    path = path or drive_path(cfg, "checkpoints", "ppo.zip")
+    pf = cfg.get("print_freq", 200)
+    total = _effective_total(cfg["ppo"]["total_timesteps"], cfg["ppo"]["n_steps"])
+    print(f"[PPO] training for {total} steps on device='{device}' (printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=total)
     model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
@@ -240,36 +185,20 @@ def train_ppo(cfg, drive_dir=None, fast=False):
     return model
 
 
-def train_dqn(cfg, drive_dir=None, fast=False):
-    """Train the DQN baseline (second required baseline) and checkpoint it."""
+def train_dqn(cfg, path=None):
+    """Train the DQN baseline (second baseline) and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
-    d = cfg["dqn"]
-    env = _train_env(cfg, fast=fast, seed=cfg["seed"])
-
-    device = _resolve_device(cfg)
-    model = DQN(
-        d["policy"], env,
-        learning_rate=d["learning_rate"], buffer_size=d["buffer_size"],
-        learning_starts=d["learning_starts"], batch_size=d["batch_size"],
-        gamma=d["gamma"], train_freq=d["train_freq"], gradient_steps=d["gradient_steps"],
-        target_update_interval=d["target_update_interval"],
-        exploration_fraction=d["exploration_fraction"],
-        exploration_final_eps=d["exploration_final_eps"],
-        policy_kwargs=d.get("policy_kwargs"), device=device,
-        seed=cfg["seed"], verbose=d.get("verbose", 1),
-    )
+    device = resolve_device(cfg)
+    env = create_environment(cfg, seed=cfg["seed"])
+    model = build_dqn(cfg, env, device)
     _attach_logger(model, cfg, "dqn")
-    path = drive_dir or drive_path(cfg, "checkpoints", "dqn.zip")
-    pf = d.get("print_freq", cfg.get("print_freq", 500))
-    n_envs = max(1, int(cfg.get("n_envs", 1)))
-    # DQN collects train_freq steps per env before each gradient update.
-    tf = d["train_freq"] if isinstance(d["train_freq"], int) else 1
-    total = _effective_total(d["total_timesteps"], tf * n_envs)
-    rounded = f" (rounded up from {d['total_timesteps']})" if total != d["total_timesteps"] else ""
-    print(f"[DQN] training for {total} steps{rounded} on device='{device}' "
-          f"with n_envs={n_envs} (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=total,
-                               curve_csv=os.path.join(curve_dir(cfg, "dqn"), "curve.csv"))
+
+    path = path or drive_path(cfg, "checkpoints", "dqn.zip")
+    pf = cfg.get("print_freq", 200)
+    tf = cfg["dqn"]["train_freq"] if isinstance(cfg["dqn"]["train_freq"], int) else 1
+    total = _effective_total(cfg["dqn"]["total_timesteps"], tf)
+    print(f"[DQN] training for {total} steps on device='{device}' (printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=total)
     model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
@@ -293,34 +222,42 @@ def load_model(path, algo):
 # =============================================================================
 # Part 2 — logic-shaped reward fine-tune (Step C)
 # =============================================================================
-def finetune_logic_reward(model, cfg, drive_dir=None, fast=False):
+def _to_device(model, cfg):
+    """Move an already-loaded SB3 model to the resolved device (for fine-tuning)."""
+    dev = resolve_device(cfg)
+    try:
+        import torch
+        model.device = torch.device(dev)
+        model.policy.to(dev)
+    except Exception:
+        pass
+    return model
+
+
+def finetune_logic_reward(model, cfg, drive_dir=None):
     """Warm-start ``model`` and continue training on the logic-augmented reward.
 
     The genuine "fine-tune": same policy, a lower learning rate, fewer steps, and
     an env whose reward includes ``- Σ λ_i · violation_i`` (LogicRewardWrapper).
-    Returns the fine-tuned model and checkpoints it as ``ppo_nesy.zip``.
+    Returns the fine-tuned model and checkpoints it as ``part2_nesy.zip``.
     """
     set_global_seeds(cfg["seed"])
     ft = cfg["finetune"]
-    env = make_env(cfg, render=False, seed=cfg["seed"], fast=fast, logic_reward=True)
+    env = create_environment(cfg, seed=cfg["seed"], logic_reward=True)
 
     model.set_env(env)
     _to_device(model, cfg)
-    # Lower, constant learning rate for the fine-tune.
     ft_lr = ft["learning_rate"]
     model.learning_rate = ft_lr
     model.lr_schedule = lambda _progress_remaining: ft_lr
 
     _attach_logger(model, cfg, "part2_nesy")
     path = drive_dir or drive_path(cfg, "checkpoints", "part2_nesy.zip")
-    pf = ft.get("print_freq", cfg.get("print_freq", 500))
-    # Warm-start: training continues from the Part-1 step count (reset_num_timesteps
-    # =False). Round the extra budget to a whole rollout and target start+extra so
-    # the ETA counts down over THIS fine-tune, not the absolute timeline.
+    pf = cfg.get("print_freq", 200)
     start = int(model.num_timesteps)
     extra = _effective_total(ft["total_timesteps"], getattr(model, "n_steps", 1))
-    print(f"[NESY-FT] fine-tuning for {extra} more steps on "
-          f"device='{model.device}' (printing every {pf} steps)…", flush=True)
+    print(f"[NESY-FT] fine-tuning for {extra} more steps on device='{model.device}' "
+          f"(printing every {pf} steps)…", flush=True)
     printer = _ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra)
     model.learn(total_timesteps=extra, callback=printer, reset_num_timesteps=False)
 
@@ -345,19 +282,18 @@ def train_ppo_md(cfg, drive_dir=None):
     p = cfg["metadrive"]["ppo"]
     env = make_env_md(cfg, render=False, seed=cfg["seed"])
 
-    device = _resolve_device(cfg)
+    device = resolve_device(cfg)
     model = PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p.get("ent_coef", 0.0), policy_kwargs=p.get("policy_kwargs"),
-        device=device, seed=cfg["seed"], verbose=p.get("verbose", 1),
+        device=device, seed=cfg["seed"], verbose=0,
     )
     _attach_logger(model, cfg, "part3_metadrive")
     path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
-    pf = p.get("print_freq", cfg.get("print_freq", 500))
-    # Single MetaDrive env, so the rollout is n_steps; round the budget up to it.
+    pf = cfg.get("print_freq", 200)
     total = _effective_total(p["total_timesteps"], p["n_steps"])
     print(f"[MD-PPO] training for {total} steps on device='{device}' "
           f"(printing every {pf} steps)…", flush=True)

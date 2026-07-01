@@ -4,11 +4,10 @@
     shield, per-rule violation counting (independent MTL monitor), and an
     optional ≥``video_seconds`` clip of the same policy driving.
   * ``record_video``        — MP4 of one model driving, in-process (Parts 1-3).
-  * ``record_video_safe``   — same, but rendered in a SUBPROCESS so a headless-
-    Colab pygame/SDL segfault can't crash the notebook kernel. ``evaluate`` uses
-    this when given the model's checkpoint path (the Colab-safe path).
   * ``record_random_video`` — short random-policy clip (the Part-1 env study).
   * ``show_video``          — embed an MP4 inline in the notebook.
+  * ``record_video_safe``   — Part 2 only: render in a subprocess (kept for the
+    NeSy notebook; Part 1 uses in-process ``record_video``).
   * ``select_nesy_method``  — rank the Part-2 NeSy configs (shield vs reward).
 
 Per-rule violations are counted by ``nesy.roadmap.rule_violations`` on the SI
@@ -23,7 +22,7 @@ import os
 
 import numpy as np
 
-from envs.highway_factory import make_env, read_scene
+from envs.highway_factory import create_environment, read_scene
 
 # Rules audited by the independent monitor (order used everywhere we tabulate).
 _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
@@ -33,8 +32,7 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None, video_path=None, video_seconds=None,
-             video_model_path=None, video_algo=None, cfg_path="configs/highway.yaml"):
+             env_fn=None, scene_fn=None, video_path=None, video_seconds=None):
     """Evaluate ``model`` over held-out seeds and aggregate metrics.
 
     Args:
@@ -43,18 +41,12 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
         seeds: eval seeds; defaults to ``cfg['eval_seeds']``.
         apply_shield: wrap each action in the NeSy safety shield (Part 2/3).
         count_violations: report per-rule violation rates (independent monitor).
-        env_fn: builder ``(cfg, render) -> env``; defaults to highway ``make_env``.
+        env_fn: builder ``(cfg, render) -> env``; defaults to highway.
         scene_fn: ``env -> scene dict``; defaults to highway ``read_scene``.
-        video_path: if set, also save a clip of this policy driving (same shield
-            setting) to this path, at least ``video_seconds`` long, and return it
-            under ``video``. Lets one call both score *and* show a model.
+        video_path: if set, also save an in-process clip of this policy driving
+            (same shield setting), at least ``video_seconds`` long, returned under
+            ``video`` — so one call can both score and show a model.
         video_seconds: minimum video length; defaults to ``cfg['eval']['video_seconds']``.
-        video_model_path, video_algo: if given (with ``video_path``), the clip is
-            rendered in a SUBPROCESS from this checkpoint — kernel-safe on headless
-            Colab (the in-process pygame renderer can segfault the notebook). This
-            is the path the notebooks use. Without them, falls back to in-process
-            ``record_video`` (fine locally).
-        cfg_path: config path the render subprocess reloads (default repo YAML).
 
     Returns:
         dict with ``summary`` (headline metrics + overtaking diagnostics, and
@@ -62,7 +54,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
         when ``video_path`` is set, ``video``.
     """
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
-    env_fn = env_fn or (lambda c, render: make_env(c, render=render))
+    env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
     scene_fn = scene_fn or read_scene
     ec = cfg["eval"]
 
@@ -85,18 +77,10 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
 
     if video_path is not None:
         secs = video_seconds if video_seconds is not None else ec.get("video_seconds", 30)
-        if video_model_path is not None:
-            # Kernel-safe: render from the checkpoint in a child process so a
-            # headless-Colab pygame/SDL segfault can't kill the notebook kernel.
-            result["video"] = record_video_safe(
-                video_model_path, video_algo, cfg_path, video_path,
-                apply_shield=apply_shield, min_seconds=secs,
-            )
-        else:
-            result["video"] = record_video(
-                model, cfg, video_path, apply_shield=apply_shield,
-                env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
-            )
+        result["video"] = record_video(
+            model, cfg, video_path, apply_shield=apply_shield,
+            env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
+        )
     return result
 
 
@@ -307,7 +291,7 @@ def record_video(model, cfg, path, n_episodes=None, seed=None,
     n_episodes = n_episodes if n_episodes is not None else cfg["eval"].get("video_episodes", 1)
     seed = seed if seed is not None else cfg["eval_seeds"][0]
     fps = cfg["eval"].get("video_fps", 10)
-    env_fn = env_fn or (lambda c, render: make_env(c, render=render))
+    env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
     scene_fn = scene_fn or read_scene
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
@@ -353,7 +337,7 @@ def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
 
     seed = seed if seed is not None else cfg["eval_seeds"][0]
     n_steps = n_steps if n_steps is not None else cfg["env"]["config"].get("duration", 40)
-    env_fn = env_fn or (lambda c, render: make_env(c, render=render))
+    env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     env = env_fn(cfg, True)

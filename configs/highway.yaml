@@ -17,11 +17,8 @@ seed: 42
 eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
 # ---- Compute + logging (shared by all trainers) ------------------------------
-device: cuda          # use the Colab T4 GPU ('cuda'); falls back to CPU if absent.
+device: auto          # 'auto' = GPU if present else CPU; also accepts 'cpu' or 'cuda'.
 print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
-n_envs: 1             # parallel training envs (SubprocVecEnv) — the model-free speedup.
-                      # 1 = no parallelism, so the step budget rounds cleanly (raise to ~8 for
-                      # a faster full run). Eval/video always run single-env.
 
 # ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:
@@ -35,7 +32,6 @@ paths:
 # =============================================================================
 env:
   id: highway-v0
-  fast_id: highway-fast-v0
   config:
     observation:
       type: Kinematics
@@ -87,7 +83,6 @@ ppo:
   max_grad_norm: 0.5
   policy_kwargs:
     net_arch: [256, 256]
-  verbose: 1
 
 dqn:
   policy: MlpPolicy
@@ -104,7 +99,6 @@ dqn:
   exploration_final_eps: 0.05
   policy_kwargs:
     net_arch: [256, 256]
-  verbose: 1
 
 eval:
   episodes_per_seed: 5
