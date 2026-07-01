@@ -22,45 +22,31 @@ import gymnasium as gym
 # highway_env must be imported so its envs register with gymnasium.
 import highway_env  # noqa: F401
 
-_VIRTUAL_DISPLAY = None
-
-
 def _ensure_render_backend():
-    """Ensure pygame can render OFFSCREEN before we build a render env.
+    """Set up a render backend for rgb_array frames — used inside the video subprocess.
 
-    highway-env renders with pygame/SDL, but this project only ever renders to
-    ``rgb_array`` (frames for images/videos) — it never needs a live window. So we
-    always force an offscreen backend, which avoids two failure modes:
+    Videos are rendered in a subprocess (never in the notebook kernel), so this only
+    configures that child process:
 
-      * macOS + Jupyter: initializing a Cocoa window off the app's main thread
-        segfaults the kernel ("The Kernel crashed"). The ``dummy`` SDL driver skips
-        window creation entirely, so there is nothing to crash.
-      * Linux (Colab/Kaggle): there is no screen at all — start a headless virtual
-        display (xvfb via pyvirtualdisplay) if available, else fall back to dummy.
+      * Linux (Colab/Kaggle) has no screen — start a headless virtual display (xvfb
+        via pyvirtualdisplay) and keep it alive for the process.
+      * macOS/Windows — use the native backend, which yields real frames. That is
+        safe here because the crash it can cause only happens in the Jupyter kernel.
 
-    highway-env draws to an offscreen ``Surface``, so the dummy driver still yields
-    real pixels. If a real display is already configured, we respect it.
+    An already-configured display or driver is respected.
     """
-    global _VIRTUAL_DISPLAY
     import sys
-
-    # Respect an already-configured backend or a real display.
-    if os.environ.get("SDL_VIDEODRIVER") or os.environ.get("DISPLAY"):
+    if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
         return
-
     if sys.platform == "linux":
         try:
             from pyvirtualdisplay import Display
 
-            _VIRTUAL_DISPLAY = Display(visible=0, size=(1400, 900))
-            _VIRTUAL_DISPLAY.start()
-            return
+            display = Display(visible=0, size=(1400, 900))
+            display.start()
+            _ensure_render_backend._display = display   # keep the xvfb process alive
         except Exception:
-            pass
-
-    # macOS / Windows (and Linux without xvfb): render offscreen so pygame never
-    # opens a window — this is what prevents the Jupyter-kernel crash on macOS.
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
 def create_environment(cfg, render=False, seed=None, logic_reward=False):

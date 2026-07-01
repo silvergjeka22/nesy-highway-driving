@@ -17,7 +17,7 @@ seed: 42
 eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
 # ---- Compute + logging (shared by all trainers) ------------------------------
-device: auto          # 'auto' = GPU if present else CPU; also accepts 'cpu' or 'cuda'.
+device: cpu           # small MLP policies — CPU is as fast as GPU here. ('auto'/'cuda' also work.)
 print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
 
 # ---- Where results go (mirrored to Drive from the notebooks) -----------------

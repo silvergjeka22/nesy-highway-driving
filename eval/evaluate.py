@@ -1,13 +1,15 @@
 """Evaluation harness for all four parts.
 
-  * ``evaluate``            — metrics over held-out seeds, with optional safety
-    shield, per-rule violation counting (independent MTL monitor), and an
-    optional ≥``video_seconds`` clip of the same policy driving.
-  * ``record_video``        — MP4 of one model driving, in-process (Parts 1-3).
-  * ``record_random_video`` — short random-policy clip (the Part-1 env study).
+  * ``evaluate``            — metrics over held-out seeds (no rendering), with
+    optional safety shield and per-rule violation counting (independent monitor).
+  * ``record_video_background`` — render an MP4 in a SUBPROCESS (offscreen), so
+    pygame never runs in the notebook kernel. Handles the random policy and a
+    trained model. This is what the notebooks call.
+  * ``record_video`` / ``record_random_video`` — the in-process renderers that run
+    *inside* that subprocess.
   * ``show_video``          — embed an MP4 inline in the notebook.
-  * ``record_video_safe``   — Part 2 only: render in a subprocess (kept for the
-    NeSy notebook; Part 1 uses in-process ``record_video``).
+  * ``record_video_safe``   — Part-2 compatibility wrapper over
+    ``record_video_background``.
   * ``select_nesy_method``  — rank the Part-2 NeSy configs (shield vs reward).
 
 Per-rule violations are counted by ``nesy.roadmap.rule_violations`` on the SI
@@ -32,8 +34,11 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None, video_path=None, video_seconds=None):
-    """Evaluate ``model`` over held-out seeds and aggregate metrics.
+             env_fn=None, scene_fn=None):
+    """Evaluate ``model`` over held-out seeds and aggregate metrics (no rendering).
+
+    Runs entirely in the kernel with ``render=False`` (no pygame), so it is fast and
+    safe. Videos are recorded separately with ``record_video_background``.
 
     Args:
         model: trained SB3 model.
@@ -43,15 +48,10 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
         count_violations: report per-rule violation rates (independent monitor).
         env_fn: builder ``(cfg, render) -> env``; defaults to highway.
         scene_fn: ``env -> scene dict``; defaults to highway ``read_scene``.
-        video_path: if set, also save an in-process clip of this policy driving
-            (same shield setting), at least ``video_seconds`` long, returned under
-            ``video`` — so one call can both score and show a model.
-        video_seconds: minimum video length; defaults to ``cfg['eval']['video_seconds']``.
 
     Returns:
         dict with ``summary`` (headline metrics + overtaking diagnostics, and
-        ``rule_violation_rate`` when requested), ``episodes``, ``seeds`` and,
-        when ``video_path`` is set, ``video``.
+        ``rule_violation_rate`` when requested), ``episodes`` and ``seeds``.
     """
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
     env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
@@ -73,15 +73,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
     finally:
         env.close()
 
-    result = {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
-
-    if video_path is not None:
-        secs = video_seconds if video_seconds is not None else ec.get("video_seconds", 30)
-        result["video"] = record_video(
-            model, cfg, video_path, apply_shield=apply_shield,
-            env_fn=env_fn, scene_fn=scene_fn, min_seconds=secs,
-        )
-    return result
+    return {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
 
 
 def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
@@ -223,51 +215,68 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
 
 
 # =============================================================================
-# Kernel-safe video: render in a SUBPROCESS so a pygame/SDL segfault on headless
-# Colab cannot crash the notebook kernel ("Canceled future…"). Each call gets a
-# fresh process + fresh display, which also dodges the second-pygame-init crash.
+# Background video: render in a SUBPROCESS (offscreen) so pygame never runs in
+# the notebook kernel — no macOS-kernel crash, no headless-Colab segfault, and the
+# kernel isn't blocked by the render loop. Handles the random policy and a model.
 # =============================================================================
-def record_video_safe(model_path, algo, cfg_path, out_path,
-                      apply_shield=False, min_seconds=30, timeout=900):
-    """Render ``model_path``'s ~``min_seconds`` video in a child process.
+def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
+                            apply_shield=False, min_seconds=None, n_steps=60, timeout=900):
+    """Render an MP4 to ``out_path`` in a child process. Returns the path or None.
 
-    Returns the path on success, else None. Rendering in a subprocess means a
-    pygame/SDL segfault on headless Colab cannot crash the notebook kernel
-    ("Canceled future…"). The model must already be saved to ``model_path`` and
-    the config readable at ``cfg_path`` (both true in the notebooks).
+    With ``model_path``/``algo`` it records that trained policy driving; without
+    them it records a random-policy clip (the env study). The child renders
+    offscreen (native backend on macOS, xvfb on Linux), so nothing pygame-related
+    runs in the notebook kernel.
     """
     import sys
     import subprocess
 
     # Anchor the child to the repo root so it never depends on the caller's cwd.
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = cfg_path or "configs/highway.yaml"
     cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
 
-    code = (
+    head = (
         f"import sys; sys.path.insert(0, {repo_root!r})\n"
         "from utils import load_config\n"
-        "from agents.baselines import load_model\n"
-        "from eval.evaluate import record_video\n"
         f"cfg = load_config({cfg_abs!r})\n"
-        f"m = load_model({model_path!r}, {algo!r})\n"
-        f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
-        f"min_seconds={min_seconds!r})\n"
-        "print('VIDEO_OK', p)\n"
     )
+    if model_path is not None:
+        body = (
+            "from agents.baselines import load_model\n"
+            "from eval.evaluate import record_video\n"
+            f"m = load_model({model_path!r}, {algo!r})\n"
+            f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
+            f"min_seconds={min_seconds!r})\n"
+        )
+    else:
+        body = (
+            "from eval.evaluate import record_random_video\n"
+            f"p = record_random_video(cfg, {out_path!r}, n_steps={int(n_steps)})\n"
+        )
+    code = head + body + "print('VIDEO_OK', p)\n"
+
     try:
         r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
                            capture_output=True, text=True)
     except Exception as e:
-        print("record_video_safe: could not start the render process:", repr(e))
+        print("record_video_background: could not start the render process:", repr(e))
         return None
     if r.returncode == 0:
         return out_path
     # Surface why the child failed (instead of a silent None).
-    print(f"record_video_safe: render failed (returncode={r.returncode}). Last output:")
-    tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]
-    for line in tail:
+    print(f"record_video_background: render failed (returncode={r.returncode}). Last output:")
+    for line in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]:
         print("   ", line)
     return None
+
+
+def record_video_safe(model_path, algo, cfg_path, out_path,
+                      apply_shield=False, min_seconds=30, timeout=900):
+    """Part-2 compatibility wrapper over ``record_video_background``."""
+    return record_video_background(out_path, model_path=model_path, algo=algo,
+                                   cfg_path=cfg_path, apply_shield=apply_shield,
+                                   min_seconds=min_seconds, timeout=timeout)
 
 
 # =============================================================================
