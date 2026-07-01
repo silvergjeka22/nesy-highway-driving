@@ -27,7 +27,7 @@ def make_env_md(cfg, render=False, seed=None):
 
     Args:
         cfg: full config; uses the ``metadrive:`` block.
-        render: enable offscreen RGB rendering (for ``record_video``).
+        render: enable offscreen RGB rendering (for the ``demo`` script).
         seed: start seed (MetaDrive uses integer scenario seeds).
 
     Returns:

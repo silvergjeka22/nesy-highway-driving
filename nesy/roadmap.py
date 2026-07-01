@@ -50,10 +50,10 @@ def predicates(scene, cfg):
         # RG3
         "over_speed_limit": ego["v"] > r["v_max"],
         "speed_below_min": ego["v"] < (r["v_max"] - r["delta_v_fl"]),
-        # RI1
-        "in_standstill": abs(ego["v"]) <= r["v_err"],
+        # RI1 (highway-env never fully stops, so "standstill" = crawling below v_stall)
+        "in_standstill": abs(ego["v"]) <= r.get("v_stall", r["v_err"]),
         # RG2 (needs ego acceleration; False if unavailable)
-        "unnecessary_braking": _unnecessary_braking(ego, leader, r),
+        "abrupt_braking": _abrupt_braking(ego, r),
         # RG4
         "impedes_flow": _impedes_flow(ego, leader, r),
         # RI2
@@ -62,10 +62,10 @@ def predicates(scene, cfg):
         "makes_uturn": _makes_uturn(ego, r),
     }
     preds["faster_than_left"] = preds["passing_on_right"]
-    # "must not stop" = standing where stopping is forbidden. On an interstate the
-    # exception is congestion / standing leader; simplified here to "standing and
-    # the road ahead is clear". TODO(Part 3): use lane-type / congestion map.
-    preds["must_not_stop"] = preds["in_standstill"] and (leader is None)
+    # "must not stop" = crawling below the stall speed on a live highway lane, where
+    # stopping is forbidden (highway-env has no real jams, so any such crawl is a
+    # violation). TODO(Part 3): add the lane-type / congestion exception.
+    preds["must_not_stop"] = preds["in_standstill"]
     # distance to leader (float; useful for the FSM and for differentiable logic)
     preds["leader_gap"] = (
         (leader["x"] - ego["x"] - r["car_length"]) if leader is not None else float("inf")
@@ -126,15 +126,12 @@ def scene_lanes(cfg, ego):
     return cfg.get("env", {}).get("config", {}).get("lanes_count", 4)
 
 
-def _unnecessary_braking(ego, leader, r):
+def _abrupt_braking(ego, r):
+    """RG2: harsh deceleration below ``a_abrupt`` (a comfort violation)."""
     a = ego.get("a")
     if a is None:
         return False  # acceleration not observable -> cannot assert a violation
-    if a >= r["a_abrupt"]:
-        return False
-    # Abrupt braking is "unnecessary" if there is no leader, or the leader is at a
-    # safe distance (i.e. nothing forces the brake).
-    return (leader is None) or keeps_safe_distance(ego, leader, r)
+    return a < r["a_abrupt"]
 
 
 def _impedes_flow(ego, leader, r):
@@ -218,7 +215,7 @@ def logic_penalty(preds, cfg):
         pen += lam["RI2"]
     if preds.get("impedes_flow"):
         pen += lam["RG4"]
-    if preds.get("unnecessary_braking"):
+    if preds.get("abrupt_braking"):
         pen += lam["RG2"]
     return pen
 
@@ -254,7 +251,7 @@ def rule_violations(preds, cfg):
     """
     return {
         "RG1": bool(preds.get("too_close")),
-        "RG2": bool(preds.get("unnecessary_braking")),
+        "RG2": bool(preds.get("abrupt_braking")),
         "RG3": bool(preds.get("over_speed_limit")),
         "RG4": bool(preds.get("impedes_flow")),
         "RI1": bool(preds.get("must_not_stop")),

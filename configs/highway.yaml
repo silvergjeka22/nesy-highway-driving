@@ -139,14 +139,20 @@ rules:
   a_max_ego: 5.0
 
   # --- RG3 speed limit ---
-  v_max: 30.0              # lane speed limit [m/s] (highway-env scale)
+  v_max: 25.0              # lane speed limit [m/s]. Below highway-env's 30 m/s top target
+                           # speed so "over the limit" is actually observable (the ego's
+                           # discrete target speeds are {20, 25, 30}).
   v_su: 36.66              # suggested speed if no limit [m/s]        (Table II)
 
   # --- RG4 preserve flow ---
-  delta_v_fl: 15.0         # slow-driving / flow threshold [m/s]     (Table II)
+  delta_v_fl: 4.0          # slow-driving margin below the limit [m/s]; ego at the 20 m/s
+                           # target (< v_max - delta_v_fl = 21) counts as impeding flow.
 
   # --- RI1 no stopping ---
   v_err: 0.01              # standstill tolerance [m/s]              (Table II)
+  v_stall: 18.0            # highway-env "near standstill": below the ego's slowest normal
+                           # target (20 m/s) it was forced to crawl — a forbidden near-stop
+                           # (highway-env never fully stops).
 
   # --- RI2 no passing on the right (exceptions: queue/slow/congestion) ---
   v_con: 2.78              # congestion max velocity [m/s]           (Table II)

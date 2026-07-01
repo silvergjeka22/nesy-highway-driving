@@ -1,16 +1,11 @@
-"""Evaluation harness for all four parts.
+"""Evaluation harness (metrics only — no rendering).
 
-  * ``evaluate``            — metrics over held-out seeds (no rendering), with
-    optional safety shield and per-rule violation counting (independent monitor).
-  * ``record_video_background`` — render an MP4 in a SUBPROCESS (offscreen), so
-    pygame never runs in the notebook kernel. Handles the random policy and a
-    trained model. This is what the notebooks call.
-  * ``record_video`` / ``record_random_video`` — the in-process renderers that run
-    *inside* that subprocess.
-  * ``show_video``          — embed an MP4 inline in the notebook.
-  * ``record_video_safe``   — Part-2 compatibility wrapper over
-    ``record_video_background``.
+  * ``evaluate``            — metrics over held-out seeds, with an optional safety
+    shield and per-rule violation counting (independent monitor).
   * ``select_nesy_method``  — rank the Part-2 NeSy configs (shield vs reward).
+
+Runs entirely with ``render=False`` (no pygame), so it is fast and never touches a
+kernel. Videos are produced separately by the standalone ``demo/demo.py`` script.
 
 Per-rule violations are counted by ``nesy.roadmap.rule_violations`` on the SI
 scene, NOT by the shield/reward the agent sees, so "fewer violations" is not
@@ -19,8 +14,6 @@ serves highway-env and MetaDrive.
 
 No top-level execution — the notebooks call these.
 """
-
-import os
 
 import numpy as np
 
@@ -36,9 +29,6 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
              env_fn=None, scene_fn=None):
     """Evaluate ``model`` over held-out seeds and aggregate metrics (no rendering).
-
-    Runs entirely in the kernel with ``render=False`` (no pygame), so it is fast and
-    safe. Videos are recorded separately with ``record_video_background``.
 
     Args:
         model: trained SB3 model.
@@ -212,196 +202,3 @@ def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
     pool = [r for r in table if r["eligible"]] or table
     best = min(pool, key=lambda r: (r["total_violation_rate"], -r["overtakes"]))
     return best["config"], table
-
-
-# =============================================================================
-# Background video: render in a SUBPROCESS (offscreen) so pygame never runs in
-# the notebook kernel — no macOS-kernel crash, no headless-Colab segfault, and the
-# kernel isn't blocked by the render loop. Handles the random policy and a model.
-# =============================================================================
-def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
-                            apply_shield=False, min_seconds=None, n_steps=60, timeout=900):
-    """Render an MP4 to ``out_path`` in a child process. Returns the path or None.
-
-    With ``model_path``/``algo`` it records that trained policy driving; without
-    them it records a random-policy clip (the env study). The child renders
-    offscreen (native backend on macOS, xvfb on Linux), so nothing pygame-related
-    runs in the notebook kernel. Audio is disabled in the child so pygame.init()
-    can't segfault opening a sound device on a headless machine (the ALSA crash).
-    """
-    import sys
-    import subprocess
-
-    # Anchor the child to the repo root so it never depends on the caller's cwd.
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cfg_path = cfg_path or "configs/highway.yaml"
-    cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
-
-    # In the child, BEFORE importing pygame/highway-env: disable audio (a headless
-    # machine has no sound device, so pygame.init() segfaults opening ALSA), and
-    # start an offscreen xvfb display on Linux for real frames. We must NOT set
-    # SDL_VIDEODRIVER=dummy — highway-env blanks all frames when it detects it.
-    head = (
-        "import os, sys\n"
-        "os.environ['SDL_AUDIODRIVER'] = 'dummy'\n"
-        "os.environ.pop('SDL_VIDEODRIVER', None)\n"
-        "if sys.platform == 'linux' and not os.environ.get('DISPLAY'):\n"
-        "    try:\n"
-        "        from pyvirtualdisplay import Display\n"
-        "        _XVFB = Display(visible=0, size=(1400, 900)); _XVFB.start()\n"
-        "    except Exception as _e:\n"
-        "        print('xvfb unavailable:', _e)\n"
-        f"sys.path.insert(0, {repo_root!r})\n"
-        "from utils import load_config\n"
-        f"cfg = load_config({cfg_abs!r})\n"
-    )
-    if model_path is not None:
-        body = (
-            "from agents.baselines import load_model\n"
-            "from eval.evaluate import record_video\n"
-            f"m = load_model({model_path!r}, {algo!r})\n"
-            f"p = record_video(m, cfg, {out_path!r}, apply_shield={bool(apply_shield)}, "
-            f"min_seconds={min_seconds!r})\n"
-        )
-    else:
-        body = (
-            "from eval.evaluate import record_random_video\n"
-            f"p = record_random_video(cfg, {out_path!r}, n_steps={int(n_steps)})\n"
-        )
-    code = head + body + "print('VIDEO_OK', p)\n"
-
-    # Child env: no audio device, and drop any inherited dummy video driver.
-    child_env = {k: v for k, v in os.environ.items() if k != "SDL_VIDEODRIVER"}
-    child_env["SDL_AUDIODRIVER"] = "dummy"
-
-    try:
-        r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
-                           capture_output=True, text=True, env=child_env)
-    except Exception as e:
-        print(f"[video] FAIL  {out_path}  (could not start render process: {e!r})")
-        return None
-
-    # Verify the clip was actually written and is non-empty; print a clear OK/FAIL.
-    size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
-    if r.returncode == 0 and size > 0:
-        print(f"[video] OK    {out_path}  ({size // 1024} KB)")
-        return out_path
-    print(f"[video] FAIL  {out_path}  (returncode={r.returncode}, size={size} B). Last output:")
-    for line in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-15:]:
-        print("    ", line)
-    return None
-
-
-def record_video_safe(model_path, algo, cfg_path, out_path,
-                      apply_shield=False, min_seconds=30, timeout=900):
-    """Part-2 compatibility wrapper over ``record_video_background``."""
-    return record_video_background(out_path, model_path=model_path, algo=algo,
-                                   cfg_path=cfg_path, apply_shield=apply_shield,
-                                   min_seconds=min_seconds, timeout=timeout)
-
-
-# =============================================================================
-# In-process video (used by the subprocess above, and locally)
-# =============================================================================
-def record_video(model, cfg, path, n_episodes=None, seed=None,
-                 apply_shield=False, env_fn=None, scene_fn=None, min_seconds=None):
-    """Record an MP4 of the policy driving, saved to ``path``. Returns ``path``.
-
-    Captures ``env.render()`` frames manually and writes them with imageio — this
-    works uniformly for highway-env and MetaDrive.
-
-    ``min_seconds``: if set, keep playing episodes until the clip is at least this
-    long (≈ ``min_seconds × fps`` frames), capped at ``video_max_episodes`` — so a
-    short (crashed) episode doesn't give a 2-second video. Otherwise plays
-    ``n_episodes``.
-    """
-    from utils import save_mp4
-    from nesy.roadmap import predicates, safety_shield
-
-    n_episodes = n_episodes if n_episodes is not None else cfg["eval"].get("video_episodes", 1)
-    seed = seed if seed is not None else cfg["eval_seeds"][0]
-    fps = cfg["eval"].get("video_fps", 10)
-    env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
-    scene_fn = scene_fn or read_scene
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-
-    target_frames = int(min_seconds * fps) if min_seconds else None
-    max_episodes = int(cfg["eval"].get("video_max_episodes", 40))
-
-    env = env_fn(cfg, True)
-    frames = []
-    try:
-        ep = 0
-        while True:
-            obs, _ = env.reset(seed=int(seed) + ep)
-            fsm_state = cfg["fsm"]["initial_state"]
-            done = False
-            while not done:
-                action, _ = model.predict(obs, deterministic=cfg["eval"]["deterministic"])
-                if apply_shield:
-                    preds = predicates(scene_fn(env), cfg)
-                    action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
-                obs, _, terminated, truncated, _ = env.step(action)
-                frame = env.render()
-                if frame is not None:
-                    frames.append(np.asarray(frame))
-                done = terminated or truncated
-            ep += 1
-            if target_frames is not None:
-                if len(frames) >= target_frames or ep >= max_episodes:
-                    break
-            elif ep >= n_episodes:
-                break
-    finally:
-        env.close()
-
-    return save_mp4(frames, path, fps=fps)
-
-
-def record_random_video(cfg, path, n_steps=None, seed=None, env_fn=None):
-    """Record a short random-policy rollout (Part-1 environment study).
-
-    Lets the reader see the task before any learning. Returns ``path``.
-    """
-    from utils import save_mp4
-
-    seed = seed if seed is not None else cfg["eval_seeds"][0]
-    n_steps = n_steps if n_steps is not None else cfg["env"]["config"].get("duration", 40)
-    env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-
-    env = env_fn(cfg, True)
-    frames = []
-    try:
-        env.reset(seed=int(seed))
-        for _ in range(int(n_steps)):
-            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
-            frame = env.render()
-            if frame is not None:
-                frames.append(np.asarray(frame))
-            if terminated or truncated:
-                env.reset()
-    finally:
-        env.close()
-
-    return save_mp4(frames, path, fps=cfg["eval"].get("video_fps", 10))
-
-
-def show_video(path, width=720):
-    """Return an IPython HTML5 ``<video>`` that embeds the MP4 inline (for Colab).
-
-    Base64-embeds the file so it plays in the notebook regardless of the Drive
-    path. Use in the last cell: ``show_video(drive_path(cfg,'videos','part1_best.mp4'))``.
-    """
-    import base64
-    from IPython.display import HTML
-
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    return HTML(
-        f'<video controls autoplay loop width="{width}">'
-        f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
-        "</video>"
-    )
-
-# Part 4 (head-to-head race) lives in eval/race.py: race(), record_race_video().
