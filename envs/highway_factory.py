@@ -28,14 +28,21 @@ def _ensure_render_backend():
     Videos are rendered in a subprocess (never in the notebook kernel), so this only
     configures that child process:
 
+      * Always disable audio (``SDL_AUDIODRIVER=dummy``): highway-env calls
+        ``pygame.init()``, which opens the audio device, and on a headless machine
+        (no sound card) that segfaults the process with ALSA errors. Rendering never
+        needs audio.
       * Linux (Colab/Kaggle) has no screen — start a headless virtual display (xvfb
-        via pyvirtualdisplay) and keep it alive for the process.
+        via pyvirtualdisplay) and keep it alive. We must NOT use ``SDL_VIDEODRIVER=
+        dummy`` for video: highway-env disables all drawing when it sees the dummy
+        video driver, which would produce blank frames.
       * macOS/Windows — use the native backend, which yields real frames. That is
         safe here because the crash it can cause only happens in the Jupyter kernel.
 
     An already-configured display or driver is respected.
     """
     import sys
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
         return
     if sys.platform == "linux":

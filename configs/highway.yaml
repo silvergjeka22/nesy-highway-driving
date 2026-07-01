@@ -65,14 +65,16 @@ env:
 # Part-2 NeSy comparison (the plan's explicit warning).
 shaping:
   enabled: true
-  overtake_bonus: 0.05
-  offroad_penalty: 0.10
+  overtake_bonus: 0.5       # reward passing traffic (native step reward is ~0-0.5, so this
+                            # makes each overtake clearly worth it) — still light vs a full
+                            # return, so it doesn't confound the Part-2 NeSy comparison.
+  offroad_penalty: 0.10     # crash/off-road penalty kept intact.
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 1000      # quick smoke run to validate the pipeline (raise to ~200000 for a full baseline)
+  total_timesteps: 1000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
   learning_rate: 0.0005
-  n_steps: 512               # quick-run: smaller rollout = updates sooner (raise to 2048 for full)
+  n_steps: 512               # rollout length before each update
   batch_size: 256
   n_epochs: 10
   gamma: 0.95
@@ -86,15 +88,15 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 1000      # quick smoke run to validate the pipeline (raise to ~200000 for a full baseline)
+  total_timesteps: 1000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
   learning_rate: 0.0005
   buffer_size: 50000
-  learning_starts: 100       # start learning early so the 1000-step smoke run actually trains
+  learning_starts: 100 #1000      # fill the replay buffer a little before learning
   batch_size: 64
   gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 250  # update the target net a few times within the short run
+  target_update_interval: 250 #1000  # steps between target-network syncs
   exploration_fraction: 0.2
   exploration_final_eps: 0.05
   policy_kwargs:

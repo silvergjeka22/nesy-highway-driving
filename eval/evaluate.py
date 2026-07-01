@@ -226,7 +226,8 @@ def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
     With ``model_path``/``algo`` it records that trained policy driving; without
     them it records a random-policy clip (the env study). The child renders
     offscreen (native backend on macOS, xvfb on Linux), so nothing pygame-related
-    runs in the notebook kernel.
+    runs in the notebook kernel. Audio is disabled in the child so pygame.init()
+    can't segfault opening a sound device on a headless machine (the ALSA crash).
     """
     import sys
     import subprocess
@@ -236,7 +237,11 @@ def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
     cfg_path = cfg_path or "configs/highway.yaml"
     cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
 
+    # Disable audio BEFORE pygame/highway-env is imported. Do NOT force a dummy video
+    # driver: highway-env blanks all frames when it detects SDL_VIDEODRIVER=dummy.
     head = (
+        "import os\n"
+        "os.environ['SDL_AUDIODRIVER'] = 'dummy'\n"
         f"import sys; sys.path.insert(0, {repo_root!r})\n"
         "from utils import load_config\n"
         f"cfg = load_config({cfg_abs!r})\n"
@@ -256,9 +261,13 @@ def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
         )
     code = head + body + "print('VIDEO_OK', p)\n"
 
+    # Child env: no audio device, and drop any inherited dummy video driver.
+    child_env = {k: v for k, v in os.environ.items() if k != "SDL_VIDEODRIVER"}
+    child_env["SDL_AUDIODRIVER"] = "dummy"
+
     try:
         r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=child_env)
     except Exception as e:
         print("record_video_background: could not start the render process:", repr(e))
         return None
