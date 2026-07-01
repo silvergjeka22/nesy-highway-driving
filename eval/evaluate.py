@@ -237,12 +237,21 @@ def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
     cfg_path = cfg_path or "configs/highway.yaml"
     cfg_abs = cfg_path if os.path.isabs(cfg_path) else os.path.join(repo_root, cfg_path)
 
-    # Disable audio BEFORE pygame/highway-env is imported. Do NOT force a dummy video
-    # driver: highway-env blanks all frames when it detects SDL_VIDEODRIVER=dummy.
+    # In the child, BEFORE importing pygame/highway-env: disable audio (a headless
+    # machine has no sound device, so pygame.init() segfaults opening ALSA), and
+    # start an offscreen xvfb display on Linux for real frames. We must NOT set
+    # SDL_VIDEODRIVER=dummy — highway-env blanks all frames when it detects it.
     head = (
-        "import os\n"
+        "import os, sys\n"
         "os.environ['SDL_AUDIODRIVER'] = 'dummy'\n"
-        f"import sys; sys.path.insert(0, {repo_root!r})\n"
+        "os.environ.pop('SDL_VIDEODRIVER', None)\n"
+        "if sys.platform == 'linux' and not os.environ.get('DISPLAY'):\n"
+        "    try:\n"
+        "        from pyvirtualdisplay import Display\n"
+        "        _XVFB = Display(visible=0, size=(1400, 900)); _XVFB.start()\n"
+        "    except Exception as _e:\n"
+        "        print('xvfb unavailable:', _e)\n"
+        f"sys.path.insert(0, {repo_root!r})\n"
         "from utils import load_config\n"
         f"cfg = load_config({cfg_abs!r})\n"
     )
@@ -269,14 +278,17 @@ def record_video_background(out_path, model_path=None, algo=None, cfg_path=None,
         r = subprocess.run([sys.executable, "-c", code], cwd=repo_root, timeout=timeout,
                            capture_output=True, text=True, env=child_env)
     except Exception as e:
-        print("record_video_background: could not start the render process:", repr(e))
+        print(f"[video] FAIL  {out_path}  (could not start render process: {e!r})")
         return None
-    if r.returncode == 0:
+
+    # Verify the clip was actually written and is non-empty; print a clear OK/FAIL.
+    size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+    if r.returncode == 0 and size > 0:
+        print(f"[video] OK    {out_path}  ({size // 1024} KB)")
         return out_path
-    # Surface why the child failed (instead of a silent None).
-    print(f"record_video_background: render failed (returncode={r.returncode}). Last output:")
-    for line in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-20:]:
-        print("   ", line)
+    print(f"[video] FAIL  {out_path}  (returncode={r.returncode}, size={size} B). Last output:")
+    for line in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-15:]:
+        print("    ", line)
     return None
 
 

@@ -35,59 +35,26 @@ def load_curve(cfg, tag):
     return out.dropna(subset=["t"])
 
 
-# Consistent colors so PPO and DQN look the same in every plot.
-_ALGO_COLORS = {"ppo": "#1f77b4", "dqn": "#ff7f0e"}
-
-
-def _smooth(series, window):
-    """Rolling mean (centered) for a readable trend line; passthrough if too short."""
-    if window <= 1 or len(series) < 3:
-        return series
-    return series.rolling(window, min_periods=1, center=True).mean()
-
-
 def plot_training_curves(cfg, tags=("ppo", "dqn"), save=True):
-    """Plot smoothed mean episode reward + length vs timesteps, PPO vs DQN.
+    """Plot mean episode reward + length vs timesteps for each ``tag``.
 
-    Each curve shows a rolling-mean trend line with the raw values faint behind it.
-    Returns the figure; saves ``metrics/training_curves.png`` to Drive.
+    Returns the matplotlib figure; saves ``metrics/training_curves.png`` to Drive.
     """
-    from matplotlib.ticker import FuncFormatter
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    panels = [("rew", "Mean episode reward", "ep_rew_mean"),
-              ("len", "Mean episode length", "ep_len_mean")]
-
-    plotted = False
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     for tag in tags:
         df = load_curve(cfg, tag)
         if df is None or df.empty:
             continue
-        plotted = True
-        color = _ALGO_COLORS.get(tag.lower(), None)
-        window = max(1, len(df) // 15)   # adapt smoothing to how many points we have
-        for ax, (col, _title, _yl) in zip(axes, panels):
-            ax.plot(df["t"], df[col], color=color, alpha=0.18, linewidth=1)          # raw, faint
-            ax.plot(df["t"], _smooth(df[col], window), color=color, linewidth=2.4,   # smoothed trend
-                    label=tag.upper())
-
-    kfmt = FuncFormatter(lambda x, _pos: f"{x/1000:g}k" if x >= 1000 else f"{x:g}")
-    for ax, (_col, title, ylabel) in zip(axes, panels):
-        ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
-        ax.set_xlabel("timesteps", fontsize=11)
-        ax.set_ylabel(ylabel, fontsize=11)
-        ax.xaxis.set_major_formatter(kfmt)
-        ax.grid(True, which="major", linestyle="--", linewidth=0.6, alpha=0.4)
-        ax.margins(x=0.01)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        if plotted:
-            ax.legend(title="algorithm", frameon=True, fontsize=10)
-
-    fig.suptitle("Training curves — PPO vs DQN", fontsize=15, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+        axes[0].plot(df["t"], df["rew"], marker=".", label=tag.upper())
+        axes[1].plot(df["t"], df["len"], marker=".", label=tag.upper())
+    axes[0].set(title="Training: mean episode reward", xlabel="timesteps", ylabel="ep_rew_mean")
+    axes[1].set(title="Training: mean episode length", xlabel="timesteps", ylabel="ep_len_mean")
+    for ax in axes:
+        ax.grid(alpha=0.3)
+        ax.legend()
+    fig.tight_layout()
     if save:
-        fig.savefig(drive_path(cfg, "metrics", "training_curves.png"), dpi=130, bbox_inches="tight")
+        fig.savefig(drive_path(cfg, "metrics", "training_curves.png"), dpi=120, bbox_inches="tight")
     return fig
 
 
