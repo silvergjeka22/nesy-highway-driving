@@ -108,6 +108,80 @@ class VelocityActionWrapper(gym.Wrapper):
         return np.array([steering, throttle], dtype=np.float32)
 
 
+def kin_obs_from_scene(scene, cfg):
+    """Reconstruct highway-env's Kinematics observation from an SI scene dict.
+
+    Lets the **discrete Part-2 policy** (trained on highway-env) run on MetaDrive: it
+    mirrors ``highway_env.KinematicObservation`` — features ``[presence,x,y,vx,vy]``,
+    the ego row absolute, up to ``vehicles_count-1`` nearest neighbours ego-relative and
+    distance-sorted, each feature mapped to [-1,1] by highway-env's ranges (MAX_SPEED=40)
+    and clipped, then zero-padded to ``vehicles_count`` rows.
+
+    Pure function (scene -> ``(vehicles_count, n_features)`` array) so it is unit-testable
+    without MetaDrive. **Approximate**: highway-env's speed scale (~25 m/s) differs from
+    MetaDrive's robot scale (~8 m/s), so the ego-speed feature reads lower than the model
+    saw in training — the policy still acts, but not identically.
+    """
+    oc = cfg["env"]["config"]["observation"]
+    feats = oc.get("features", ["presence", "x", "y", "vx", "vy"])
+    n = oc.get("vehicles_count", 5)
+    max_v = 40.0                                   # highway_env Vehicle.MAX_SPEED
+    lanes = cfg["env"]["config"].get("lanes_count", 4)
+    rng = {"x": (-5 * max_v, 5 * max_v), "y": (-4.0 * lanes, 4.0 * lanes),
+           "vx": (-2 * max_v, 2 * max_v), "vy": (-2 * max_v, 2 * max_v)}
+
+    def nz(v, key):
+        lo, hi = rng[key]
+        return float(np.clip((v - lo) / (hi - lo) * 2.0 - 1.0, -1.0, 1.0))
+
+    ego = scene["ego"]
+
+    def make_row(vd, relative):
+        bx, by, bvx, bvy = (ego["x"], ego["y"], ego["vx"], ego["vy"]) if relative else (0.0, 0.0, 0.0, 0.0)
+        full = {"presence": 1.0,
+                "x": nz(vd["x"] - bx, "x"), "y": nz(vd["y"] - by, "y"),
+                "vx": nz(vd["vx"] - bvx, "vx"), "vy": nz(vd["vy"] - bvy, "vy")}
+        return [full[f] for f in feats]
+
+    rows = [make_row(ego, relative=False)]
+    nearest = sorted(scene.get("others", []),
+                     key=lambda o: (o["x"] - ego["x"]) ** 2 + (o["y"] - ego["y"]) ** 2)[:n - 1]
+    rows += [make_row(o, relative=True) for o in nearest]
+    while len(rows) < n:
+        rows.append([0.0] * len(feats))
+    return np.asarray(rows, dtype=np.float32)
+
+
+def read_kin_obs_md(env, cfg):
+    """Highway-env Kinematics observation reconstructed from a live MetaDrive env."""
+    return kin_obs_from_scene(read_scene_md(env), cfg)
+
+
+def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
+    """One Lab-1-bridge step: run the Part-2 model on MetaDrive and return its command.
+
+    Reconstruct the highway obs (``read_kin_obs_md``) -> the Part-2 discrete model picks
+    a manoeuvre -> [optional FSM shield] -> Lab-1 ``manoeuvre_to_cmd_vel`` -> ``(v, ω)`` ->
+    [optional CBF/VO continuous filter] -> normalised MetaDrive action. Shared by the
+    Part-3 eval (``eval.evaluate_nesy_md``) and the video demo. Returns ``(action, fsm_state)``.
+    """
+    from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS
+    from labs.lab1_cmd_vel import manoeuvre_to_cmd_vel
+
+    a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
+                               deterministic=cfg["eval"].get("deterministic", True))
+    scene = read_scene_md(env)
+    manoeuvre = ACTIONS[int(a)]
+    if shield:                                       # discrete FSM shield (Part 2)
+        idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
+        manoeuvre = ACTIONS[idx]
+    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)   # Lab 1: manoeuvre -> (v, ω)
+    if shield:                                       # continuous CBF/VO filter (Labs 4/5)
+        (v, omega), _ = continuous_shield(v, omega, scene, cfg)
+    md = cfg["metadrive"]
+    return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
+
+
 def filter_action_md(action, scene, cfg):
     """Apply the continuous CBF/VO shield to a normalised ``(v_norm, ω_norm)`` action.
 

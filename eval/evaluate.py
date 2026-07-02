@@ -80,6 +80,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     ret = native_ret = 0.0
     steps = offroad_steps = 0
     viol = {k: 0 for k in _RULES}
+    speed_sum = 0.0
 
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
@@ -95,10 +96,13 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
 
         # The independent monitor audits the state the action LEADS TO — including the
         # terminal/crash state, where abrupt braking (RG2) and near-stall (RI1)
-        # concentrate. Counting the pre-action state instead would miss them.
+        # concentrate. Counting the pre-action state instead would miss them. The same
+        # post-step scene also gives the ego speed for the mean-velocity metric.
         if count_violations:
-            for k, v in rule_violations(predicates(scene_fn(env), cfg), cfg).items():
+            sc = scene_fn(env)
+            for k, v in rule_violations(predicates(sc, cfg), cfg).items():
                 viol[k] += int(v)
+            speed_sum += float(sc["ego"].get("v", 0.0))
         ret += float(reward)
         native_ret += float(info.get("native_reward", reward))
         steps += 1
@@ -120,6 +124,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     if count_violations:
         row["violations"] = viol
         row["viol_steps"] = steps
+        row["mean_speed"] = speed_sum / steps if steps else 0.0
     return row
 
 
@@ -159,7 +164,70 @@ def _summarise(rows, count_violations):
         summary["rule_violation_rate"] = {
             k: sum(r["violations"][k] for r in rows) / total_steps for k in _RULES
         }  # fraction of steps violating each rule
+        summary["mean_speed"] = float(np.mean([r["mean_speed"] for r in rows])) if rows else 0.0
     return summary
+
+
+# =============================================================================
+# Part 3 — run the Part-2 DISCRETE policy on MetaDrive via the Lab-1 cmd_vel bridge
+# =============================================================================
+def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
+    """Evaluate the Part-2 discrete policy on MetaDrive, aggregated (no rendering).
+
+    The bridge (one step): reconstruct highway Kinematics obs from MetaDrive
+    (``read_kin_obs_md``) -> the Part-2 model picks a manoeuvre -> [optional discrete
+    FSM shield] -> Lab-1 ``manoeuvre_to_cmd_vel`` -> ``(v, ω)`` -> [optional CBF/VO
+    continuous filter] -> step. Same summary shape as ``evaluate`` (rule_violation_rate
+    + mean_speed). This is how Part 2's model + all the labs run in MetaDrive.
+    """
+    from envs.metadrive_factory import make_env_md
+
+    seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
+    ec = cfg["eval"]
+    env = make_env_md(cfg, render=False)
+    rows = []
+    try:
+        for seed in seeds:
+            for ep in range(ec["episodes_per_seed"]):
+                rows.append(_run_nesy_md_episode(part2_model, env, int(seed) * 100 + ep, cfg, shield))
+    finally:
+        env.close()
+    return {"summary": _summarise(rows, True), "episodes": rows, "seeds": seeds}
+
+
+def _run_nesy_md_episode(model, env, seed, cfg, shield):
+    from envs.metadrive_factory import read_scene_md, nesy_md_action
+    from nesy.roadmap import predicates, rule_violations
+
+    obs, info = env.reset(seed=seed)
+    fsm = cfg["fsm"]["initial_state"]
+    done = False
+    ret = 0.0
+    steps = offroad_steps = 0
+    viol = {k: 0 for k in _RULES}
+    speed_sum = 0.0
+
+    while not done:
+        action, fsm = nesy_md_action(model, env, cfg, fsm, shield)   # Lab-1 bridge step
+        obs, reward, terminated, truncated, info = env.step(action)
+        sc = read_scene_md(env)
+        for k, val in rule_violations(predicates(sc, cfg), cfg).items():
+            viol[k] += int(val)
+        speed_sum += float(sc["ego"].get("v", 0.0))
+        ret += float(reward)
+        steps += 1
+        if info.get("out_of_road", info.get("is_offroad", False)):
+            offroad_steps += 1
+        done = terminated or truncated
+
+    crashed = bool(info.get("crash", info.get("crashed", info.get("crash_vehicle", False))))
+    return {
+        "seed": seed, "crashed": crashed,
+        "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
+        "overtakes": 0, "return": ret, "native_return": ret, "length": steps,
+        "violations": viol, "viol_steps": steps,
+        "mean_speed": speed_sum / steps if steps else 0.0,
+    }
 
 
 # =============================================================================
