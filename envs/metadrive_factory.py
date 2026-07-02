@@ -71,6 +71,11 @@ class VelocityActionWrapper(gym.Wrapper):
         self.omega_max = cfg["metadrive"]["omega_max"]
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
+    def reset(self, *, seed=None, options=None):
+        # MetaDrive's BaseEnv.reset() takes only `seed` (no gymnasium `options`);
+        # forward just what it accepts so the standard reset(seed=...) call works.
+        return self.env.reset(seed=seed)
+
     def step(self, action):
         v_cmd = float(np.clip(action[0], -1.0, 1.0)) * self.v_max
         omega_cmd = float(np.clip(action[1], -1.0, 1.0)) * self.omega_max

@@ -38,6 +38,7 @@ def record(model, cfg, out_path, apply_filter=False, min_seconds=30):
     seed0 = int(cfg["eval_seeds"][0])
 
     env = make_env_md(cfg, render=True, seed=seed0)
+    base = env.unwrapped   # MetaDrive's top-down render(mode=...) lives on the base env
     frames = []
     try:
         ep = 0
@@ -49,8 +50,8 @@ def record(model, cfg, out_path, apply_filter=False, min_seconds=30):
                 if apply_filter:
                     action = filter_action_md(action, read_scene_md(env), cfg)
                 obs, _, terminated, truncated, _ = env.step(action)
-                frame = env.render(mode="top_down", window=False,
-                                   screen_size=size, film_size=(size[0] * 2, size[1] * 2))
+                frame = base.render(mode="top_down", window=False,
+                                    screen_size=size, film_size=(size[0] * 2, size[1] * 2))
                 if frame is not None:
                     frames.append(np.asarray(frame))
                 done = terminated or truncated
