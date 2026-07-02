@@ -79,15 +79,18 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 3000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
+  total_timesteps: 20000 #150000   # LOWER-LIMIT fair-comparison budget: below ~20k DQN just collapses
+                                   # (100% crash) so the PPO-vs-DQN comparison is meaningless. 20k is the
+                                   # minimum where BOTH show real learning; use 50000+ for a definitive
+                                   # comparison, 150000 for the best policy. PPO & DQN share this budget.
   learning_rate: 0.0005
-  n_steps: 256               # was 512 — smaller rollouts => ~2x more gradient updates in a 3k-step run
-  batch_size: 128            # was 256 — matched to the smaller rollout
+  n_steps: 512               # rollout length before each update (standard for a real run)
+  batch_size: 256
   n_epochs: 10
   gamma: 0.95
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.03             # was 0.01 — more exploration so PPO discovers overtaking faster
+  ent_coef: 0.02             # a little exploration to keep discovering overtakes over the longer run
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
@@ -95,17 +98,18 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 3000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
-  learning_rate: 0.00025          # was 0.0005 — lower LR curbs DQN's Q-value overestimation/collapse
+  total_timesteps: 20000 #150000   # SAME budget as PPO (fair comparison). Lower limit for real DQN
+                                   # learning; below ~20k it collapses to a trivial always-accelerate policy.
+  learning_rate: 0.00025          # lower LR curbs DQN's Q-value overestimation/collapse over the run
   buffer_size: 50000
-  learning_starts: 500 #1000      # was 100 — collect more (incl. safe) transitions before learning
-  batch_size: 128                 # was 64 — steadier gradient estimates
+  learning_starts: 1000           # fill the buffer with diverse (incl. safe) transitions before learning
+  batch_size: 128                 # steadier gradient estimates
   gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 500 #1000  # was 300 — a more stable target network
-  exploration_fraction: 0.5        # was 0.2 — keep exploring through ~half the run (not just to step ~600)
-  exploration_final_eps: 0.10      # was 0.05 — retain randomness so it can't commit to a crashing greedy policy
+  target_update_interval: 1000    # a stable target network over a 20k-step run
+  exploration_fraction: 0.5        # explore through ~half the run so the Q-net is well-trained before it goes greedy
+  exploration_final_eps: 0.10      # retain some randomness so it can't commit to a crashing greedy policy
   policy_kwargs:
     net_arch: [256, 256]
 
