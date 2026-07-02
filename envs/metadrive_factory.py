@@ -72,8 +72,19 @@ class VelocityActionWrapper(gym.Wrapper):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
-        # MetaDrive's BaseEnv.reset() takes only `seed` (no gymnasium `options`);
-        # forward just what it accepts so the standard reset(seed=...) call works.
+        # MetaDrive's BaseEnv.reset() takes only `seed` (no gymnasium `options`), and
+        # that seed is a *scenario index* that must lie in
+        # ``[start_seed, start_seed + num_scenarios)``. The eval harness passes
+        # arbitrary gym-style seeds, so wrap any out-of-range seed into that window.
+        if seed is not None:
+            try:
+                start = int(self.env.config["start_seed"])
+                n = max(1, int(self.env.config["num_scenarios"]))
+            except Exception:
+                start, n = 0, 1
+            seed = int(seed)
+            if not (start <= seed < start + n):
+                seed = start + (seed % n)
         return self.env.reset(seed=seed)
 
     def step(self, action):
