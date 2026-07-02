@@ -196,13 +196,16 @@ metadrive:
   num_scenarios: 50
   horizon: 1000
   # Continuous velocity action (Lab 1 cmd_vel): a = (v, omega).
-  v_max: 10.0               # max linear speed [m/s]  (robot scale)
+  v_max: 10.0               # max commandable linear speed [m/s] (robot scale)
   omega_max: 0.6            # max angular speed [rad/s]
-  use_lidar: true
   lidar_num_lasers: 72
+  # Offscreen top-down video (demo/demo_md.py) — CPU pygame renderer, no GPU.
+  video_seconds: 30         # clip length (>= 30 s required)
+  video_fps: 20             # MetaDrive steps ~ 10 Hz control; 20 fps keeps it smooth
+  video_size: [800, 800]    # top-down film/screen size [px]
   ppo:
     policy: MlpPolicy
-    total_timesteps: 300000
+    total_timesteps: 2000 #300000   # smoke default; raise to 300000 for a real policy
     learning_rate: 0.0003
     n_steps: 2048
     batch_size: 256
@@ -213,15 +216,18 @@ metadrive:
     ent_coef: 0.0
     policy_kwargs:
       net_arch: [256, 256]
-    verbose: 1
 
 # Control Barrier Function (Lab 5) — continuous safety filter on (v, omega).
+# Robot-scale thresholds (MetaDrive's (v, omega)); the RG1 barrier itself reuses the
+# scale-free SI safe_distance from rules{}, so it is identical to the discrete shield.
 cbf:
   enabled: true
-  d_safe_min: 5.0           # minimum safe gap [m] -> h(x) = gap - d_safe_min
-  gamma: 1.0                # class-K gain for h_dot >= -gamma * h
-  v_max: 10.0
-  omega_max: 0.6
+  gamma: 1.0                # class-K gain for the barrier: h_dot >= -gamma * h
+  v_max: 8.0                # RG3 legal speed limit [m/s] (below the 10 m/s action max,
+                            # so the filter actually caps a "go fast" command)
+  v_min: 2.0               # RI1: no gratuitous standstill — keep at least this speed
+                            # unless RG1/off-road demand braking (safety overrides)
+  omega_max: 0.6            # steering-rate actuator limit [rad/s]
 
 # Velocity Obstacles / RVO (Lab 4) — continuous safe-gap + fallback avoidance.
 vo:

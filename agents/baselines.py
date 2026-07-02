@@ -274,23 +274,28 @@ def finetune_logic_reward(model, cfg, drive_dir=None):
 # =============================================================================
 # Part 3 — continuous PPO on MetaDrive (velocity action)
 # =============================================================================
-def train_ppo_md(cfg, drive_dir=None):
-    """Train PPO with a continuous ``(v, ω)`` head on MetaDrive."""
-    from envs.metadrive_factory import make_env_md
-
-    set_global_seeds(cfg["seed"])
+def build_ppo_md(cfg, env, device=None):
+    """Construct the continuous-action PPO for MetaDrive from ``cfg['metadrive']['ppo']``."""
     p = cfg["metadrive"]["ppo"]
-    env = make_env_md(cfg, render=False, seed=cfg["seed"])
-
-    device = resolve_device(cfg)
-    model = PPO(
+    return PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
         gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
         ent_coef=p.get("ent_coef", 0.0), policy_kwargs=p.get("policy_kwargs"),
-        device=device, seed=cfg["seed"], verbose=0,
+        device=device or resolve_device(cfg), seed=cfg["seed"], verbose=0,
     )
+
+
+def train_ppo_md(cfg, drive_dir=None):
+    """Train PPO with a continuous ``(v, ω)`` head on MetaDrive (same logic as Part 1)."""
+    from envs.metadrive_factory import make_env_md
+
+    set_global_seeds(cfg["seed"])
+    p = cfg["metadrive"]["ppo"]
+    device = resolve_device(cfg)
+    env = make_env_md(cfg, render=False, seed=cfg["seed"])
+    model = build_ppo_md(cfg, env, device)
     _attach_logger(model, cfg, "part3_metadrive")
     path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
     pf = cfg.get("print_freq", 200)

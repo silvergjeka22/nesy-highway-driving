@@ -27,17 +27,20 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None):
+             env_fn=None, scene_fn=None, action_filter=None):
     """Evaluate ``model`` over held-out seeds and aggregate metrics (no rendering).
 
     Args:
         model: trained SB3 model.
         cfg: full config.
         seeds: eval seeds; defaults to ``cfg['eval_seeds']``.
-        apply_shield: wrap each action in the NeSy safety shield (Part 2/3).
+        apply_shield: wrap each action in the discrete NeSy safety shield (Part 2).
         count_violations: report per-rule violation rates (independent monitor).
         env_fn: builder ``(cfg, render) -> env``; defaults to highway.
         scene_fn: ``env -> scene dict``; defaults to highway ``read_scene``.
+        action_filter: optional ``(action, scene, cfg) -> action`` applied to the
+            raw policy action (Part 3 continuous CBF/VO filter). Mutually exclusive
+            with ``apply_shield`` (which is for the discrete action set).
 
     Returns:
         dict with ``summary`` (headline metrics + overtaking diagnostics, and
@@ -59,6 +62,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
                     apply_shield=apply_shield,
                     count_violations=count_violations,
                     scene_fn=scene_fn,
+                    action_filter=action_filter,
                 ))
     finally:
         env.close()
@@ -67,7 +71,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
 
 
 def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
-                 count_violations, scene_fn):
+                 count_violations, scene_fn, action_filter=None):
     from nesy.roadmap import predicates, safety_shield, rule_violations
 
     obs, info = env.reset(seed=seed)
@@ -80,10 +84,12 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
 
-        # The shield decides from the CURRENT (pre-action) state.
+        # The shield/filter decides from the CURRENT (pre-action) state.
         if apply_shield:
             preds = predicates(scene_fn(env), cfg)
             action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
+        elif action_filter is not None:
+            action = action_filter(action, scene_fn(env), cfg)
 
         obs, reward, terminated, truncated, info = env.step(action)
 

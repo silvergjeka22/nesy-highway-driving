@@ -200,6 +200,60 @@ def safest_fallback(preds, cfg, allowed=None):
 
 
 # =============================================================================
+# Part 3 — continuous shield (CBF + velocity obstacles) on the (v, ω) action
+# =============================================================================
+def continuous_shield(v_cmd, omega_cmd, scene, cfg):
+    """Continuous analogue of ``safety_shield`` for the MetaDrive ``(v, ω)`` action.
+
+    The **same hard rules**, encoded on the continuous command instead of the
+    discrete manoeuvre set:
+      * CBF (Lab 5) — longitudinal safety: RG1 safe distance, RG3 speed limit,
+        RI1 no-stop, stay-on-road (see ``labs.lab5_cbf.cbf_filter``).
+      * Velocity obstacles (Lab 4) — lateral safety: veto a turn into a neighbour
+        on a collision course, mirroring the shield gating ``LANE_LEFT/RIGHT``.
+
+    Returns ``((v_safe, ω_safe), intervened)``.
+    """
+    from labs.lab5_cbf import cbf_filter
+    from labs.lab4_velocity_obstacles import gap_is_safe
+
+    (v_safe, omega_safe), intervened = cbf_filter(v_cmd, omega_cmd, scene, cfg)
+
+    if abs(omega_safe) > 1e-6 and not gap_is_safe(scene["ego"], scene.get("others", []), cfg):
+        omega_safe = 0.0
+        intervened = True
+    return (v_safe, omega_safe), intervened
+
+
+def rule_encoding_agreement(scene, cfg):
+    """One rule (RG1 safe distance), three encodings — checked on one scene.
+
+    Runs **without MetaDrive** (pure predicates + labs). RG1 appears as:
+      (a) the MTL predicate ``too_close`` (perception → logic),
+      (b) the discrete shield's hard-constraint mask forbidding ``FASTER``
+          (accelerating into the leader), and
+      (c) the continuous CBF barrier being active (``h(x) < 0``).
+    All three reduce to ``gap < safe_distance``, so they must agree. (The mask —
+    not the whole FSM — isolates RG1; the FSM's ``emergency_gap`` is a separate,
+    coarser envelope.) Returns each encoding's call plus ``agree`` — the project's
+    "encoded faithfully" evidence.
+    """
+    from labs.lab5_cbf import barrier_h
+    from labs.lab3_fsm import admissible_actions
+
+    preds = predicates(scene, cfg)
+    logic = bool(preds["too_close"])
+    discrete = "FASTER" not in admissible_actions("CRUISE", preds, cfg)
+    continuous = barrier_h(scene, cfg) < 0.0
+    return {
+        "too_close (MTL)": logic,
+        "shield vetoes FASTER": discrete,
+        "CBF barrier active": continuous,
+        "agree": logic == discrete == continuous,
+    }
+
+
+# =============================================================================
 # Stage C — logic-shaped reward penalty (soft heuristics)
 # =============================================================================
 def logic_penalty(preds, cfg):
