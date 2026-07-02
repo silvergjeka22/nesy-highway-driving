@@ -72,7 +72,7 @@ shaping:
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 1000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
+  total_timesteps: 3000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
   learning_rate: 0.0005
   n_steps: 512               # rollout length before each update
   batch_size: 256
@@ -88,7 +88,7 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 1000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
+  total_timesteps: 3000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
   learning_rate: 0.0005
   buffer_size: 50000
   learning_starts: 100 #1000      # fill the replay buffer a little before learning
@@ -96,7 +96,7 @@ dqn:
   gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 250 #1000  # steps between target-network syncs
+  target_update_interval: 300 #1000  # steps between target-network syncs
   exploration_fraction: 0.2
   exploration_final_eps: 0.05
   policy_kwargs:
