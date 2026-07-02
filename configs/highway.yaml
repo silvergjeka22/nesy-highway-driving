@@ -50,8 +50,9 @@ env:
     policy_frequency: 1
     simulation_frequency: 10   # quick-run: fewer physics substeps/step (raise to 15 for full)
     collision_reward: -1.0
-    right_lane_reward: 0.1
-    high_speed_reward: 0.4
+    right_lane_reward: 0.0     # was 0.1 — rewarding the rightmost lane biases AGAINST overtaking
+                              # (which happens on the left); drop it so all native reward = speed.
+    high_speed_reward: 0.5    # was 0.4 — speed is the prerequisite for overtaking (aggression).
     lane_change_reward: 0.0
     reward_speed_range: [20, 30]
     normalize_reward: true
@@ -65,22 +66,25 @@ env:
 # Part-2 NeSy comparison (the plan's explicit warning).
 shaping:
   enabled: true
-  overtake_bonus: 0.5       # reward passing traffic (native step reward is ~0-0.5, so this
-                            # makes each overtake clearly worth it) — still light vs a full
-                            # return, so it doesn't confound the Part-2 NeSy comparison.
-  offroad_penalty: 0.10     # crash/off-road penalty kept intact.
+  overtake_bonus: 1.0       # was 0.5 — strong, explicit reward for each car passed (aggression).
+  offroad_penalty: 0.5      # was 0.10 — leaving the road is clearly bad.
+  collision_penalty: 5.0    # NEW one-off crash penalty applied OUTSIDE highway-env's reward
+                            # normalization (which squashes its collision_reward to ~0/step, so
+                            # crashing was unpunished). At 5.0 a crash outweighs ~5 overtakes, so
+                            # the agent overtakes hard but treats crashing as catastrophic.
+                            # Tuning: raise if still crashing, lower if it becomes too timid.
 
 ppo:
   policy: MlpPolicy
   total_timesteps: 3000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
   learning_rate: 0.0005
-  n_steps: 512               # rollout length before each update
-  batch_size: 256
+  n_steps: 256               # was 512 — smaller rollouts => ~2x more gradient updates in a 3k-step run
+  batch_size: 128            # was 256 — matched to the smaller rollout
   n_epochs: 10
   gamma: 0.95
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.01
+  ent_coef: 0.03             # was 0.01 — more exploration so PPO discovers overtaking faster
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
@@ -89,16 +93,16 @@ ppo:
 dqn:
   policy: MlpPolicy
   total_timesteps: 3000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
-  learning_rate: 0.0005
+  learning_rate: 0.00025          # was 0.0005 — lower LR curbs DQN's Q-value overestimation/collapse
   buffer_size: 50000
-  learning_starts: 100 #1000      # fill the replay buffer a little before learning
-  batch_size: 64
+  learning_starts: 500 #1000      # was 100 — collect more (incl. safe) transitions before learning
+  batch_size: 128                 # was 64 — steadier gradient estimates
   gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 300 #1000  # steps between target-network syncs
-  exploration_fraction: 0.2
-  exploration_final_eps: 0.05
+  target_update_interval: 500 #1000  # was 300 — a more stable target network
+  exploration_fraction: 0.5        # was 0.2 — keep exploring through ~half the run (not just to step ~600)
+  exploration_final_eps: 0.10      # was 0.05 — retain randomness so it can't commit to a crashing greedy policy
   policy_kwargs:
     net_arch: [256, 256]
 

@@ -95,6 +95,7 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
             env,
             overtake_bonus=shaping.get("overtake_bonus", 0.0),
             offroad_penalty=shaping.get("offroad_penalty", 0.0),
+            collision_penalty=shaping.get("collision_penalty", 0.0),
         )
 
     if logic_reward:
@@ -210,12 +211,23 @@ class OvertakeCounter(gym.Wrapper):
 
 
 class RewardShapingWrapper(gym.Wrapper):
-    """Add a small, config-driven shaping term to the native reward (Part 1)."""
+    """Add a small, config-driven shaping term to the native reward (Part 1).
 
-    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0):
+    Three levers, all from ``cfg['shaping']``:
+      * ``overtake_bonus``  — ``+bonus`` for each car the ego passes (drives aggression).
+      * ``offroad_penalty`` — ``-pen`` per step off the road.
+      * ``collision_penalty`` — one-off ``-pen`` on a crash. highway-env's
+        ``normalize_reward`` squashes its native ``collision_reward`` to ~0 per step,
+        so crashing was effectively unpunished; this applies the penalty *outside*
+        that normalization so a crash outweighs several overtakes — the agent learns
+        to overtake hard **without** crashing.
+    """
+
+    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0):
         super().__init__(env)
         self.overtake_bonus = float(overtake_bonus)
         self.offroad_penalty = float(offroad_penalty)
+        self.collision_penalty = float(collision_penalty)
         self._prev_overtakes = 0
 
     def reset(self, **kwargs):
@@ -232,6 +244,8 @@ class RewardShapingWrapper(gym.Wrapper):
         shaped = reward + self.overtake_bonus * passed
         if info.get("is_offroad", False):
             shaped -= self.offroad_penalty
+        if info.get("crashed", False):
+            shaped -= self.collision_penalty
 
         info = dict(info)
         info["native_reward"] = float(reward)
