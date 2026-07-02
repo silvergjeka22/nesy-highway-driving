@@ -66,13 +66,16 @@ env:
 # Part-2 NeSy comparison (the plan's explicit warning).
 shaping:
   enabled: true
-  overtake_bonus: 1.0       # was 0.5 — strong, explicit reward for each car passed (aggression).
-  offroad_penalty: 0.5      # was 0.10 — leaving the road is clearly bad.
-  collision_penalty: 5.0    # NEW one-off crash penalty applied OUTSIDE highway-env's reward
-                            # normalization (which squashes its collision_reward to ~0/step, so
-                            # crashing was unpunished). At 5.0 a crash outweighs ~5 overtakes, so
-                            # the agent overtakes hard but treats crashing as catastrophic.
-                            # Tuning: raise if still crashing, lower if it becomes too timid.
+  overtake_bonus: 1.5       # each car passed (aggression). Tuned via an A/B/C/D sweep (see below).
+  offroad_penalty: 0.5      # leaving the road is clearly bad.
+  collision_penalty: 1.0    # one-off crash penalty applied OUTSIDE highway-env's reward
+                            # normalization (which squashes its native collision_reward to ~0/step).
+                            # SWEEP RESULT (PPO, 2500 steps): 5.0 made PPO too timid (0.5 overtakes,
+                            # never tries); 1.0 unlocks overtaking (1.25 overtakes) while keeping most
+                            # episodes crash-free. It's the aggression<->safety dial: raise toward 3-5
+                            # to trade overtakes for fewer crashes, lower toward 0.5 for more aggression.
+                            # NOTE: this floor-keeping config needs normalize_reward:true (env.config);
+                            # normalize_reward:false makes it fast but ~100% crash at short budgets.
 
 ppo:
   policy: MlpPolicy
