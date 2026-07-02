@@ -36,10 +36,57 @@ sys.path.insert(0, _REPO)
 
 import numpy as np  # noqa: E402
 
+
+def _enable_cross_numpy_checkpoint_loading():
+    """Let a NumPy 1.x interpreter unpickle a checkpoint saved under NumPy 2.x.
+
+    On Intel macOS the newest available torch is 2.2.2, which requires ``numpy<2``.
+    Checkpoints trained on Colab are pickled under ``numpy>=2``, whose arrays and
+    dtypes reference the private ``numpy._core`` module that does not exist in
+    NumPy 1.x (raising "No module named 'numpy._core'"). Aliasing the old public
+    ``numpy.core`` submodules under the new ``numpy._core`` names lets cloudpickle
+    resolve them. No-op when already on NumPy 2.x.
+    """
+    if not np.__version__.startswith("1."):
+        return
+    import numpy.core as _core
+
+    sys.modules.setdefault("numpy._core", _core)
+    for sub in ("multiarray", "numeric", "umath", "overrides",
+                "_exceptions", "fromnumeric", "_methods"):
+        mod = getattr(_core, sub, None)
+        if mod is not None:
+            sys.modules.setdefault(f"numpy._core.{sub}", mod)
+
+
+_enable_cross_numpy_checkpoint_loading()
+
 from utils import load_config, save_mp4  # noqa: E402
 from envs.highway_factory import create_environment, read_scene  # noqa: E402
-from agents.baselines import load_model  # noqa: E402
+from agents.baselines import load_model, build_ppo, build_dqn  # noqa: E402
 from nesy.roadmap import predicates, safety_shield  # noqa: E402
+
+
+def load_policy_weights(weights_path, algo, cfg):
+    """Rebuild a model from a torch policy ``state_dict`` (``.pt``).
+
+    Cross-version escape hatch: a full SB3 ``.zip`` saved on Colab (newer SB3 +
+    NumPy 2) can't be unpickled on an Intel-Mac stack (older SB3 + NumPy 1) — it
+    trips on ``FloatSchedule`` and the NumPy-2 RNG. A bare ``state_dict`` is just
+    torch tensors, so it loads anywhere. We build a fresh model from the config
+    (identical architecture) and copy the weights into its policy.
+    """
+    import torch
+
+    build = build_ppo if algo == "ppo" else build_dqn
+    env = create_environment(cfg)  # only needed for the observation/action spaces
+    try:
+        model = build(cfg, env, device="cpu")
+        state = torch.load(weights_path, map_location="cpu")
+        model.policy.load_state_dict(state)
+    finally:
+        env.close()
+    return model
 
 
 def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
@@ -89,7 +136,11 @@ def main():
     out_path = args.out or (os.path.splitext(args.model)[0] + ("_shield.mp4" if args.shield else ".mp4"))
 
     print(f"loading {args.algo} model: {args.model}")
-    model = load_model(args.model, args.algo)
+    if args.model.endswith((".pt", ".pth")):
+        # weights-only path (torch state_dict) — cross-version safe
+        model = load_policy_weights(args.model, args.algo, cfg)
+    else:
+        model = load_model(args.model, args.algo)
     print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
     path = record(model, cfg, out_path, apply_shield=args.shield, min_seconds=min_seconds)
 
