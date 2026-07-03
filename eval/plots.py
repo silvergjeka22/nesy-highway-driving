@@ -56,9 +56,15 @@ def plot_training_curves(cfg, tags=("rppo", "dqn", "qrdqn"), save=True):
         if df is None or df.empty:
             continue
         for ax, (col, _) in zip(axes.flat, panels):
-            ax.plot(df["t"], df[col], marker=".", label=tag.upper())
+            # SB3's own dump rows interleave with the printer's full rows, leaving
+            # NaN holes that break the line into disconnected dots — drop them
+            # per column so every curve is a continuous line.
+            d = df[["t", col]].dropna().sort_values("t")
+            ax.plot(d["t"], d[col], marker=".", label=tag.upper())
     for ax, (col, title) in zip(axes.flat, panels):
         ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
+        if col == "crash":
+            ax.set_ylim(0.0, 1.05)      # full 0-100% scale: a 0.9-1.0 zoom exaggerates noise
         ax.grid(alpha=0.3)
         ax.legend()
     for ax in axes.flat[len(panels):]:

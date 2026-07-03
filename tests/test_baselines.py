@@ -112,6 +112,19 @@ def test_exploration_wired():
     assert qrdqn.policy.n_quantiles == cfg["qrdqn"]["policy_kwargs"]["n_quantiles"]
 
 
+def test_entropy_decay():
+    """The RecurrentPPO entropy schedule interpolates start -> end and clamps."""
+    from types import SimpleNamespace
+    from agents.baselines import _EntropyDecay
+
+    cb = _EntropyDecay(start=0.05, end=0.01, total_steps=100)
+    cb.model = SimpleNamespace(ent_coef=0.05)
+    for step, expected in ((0, 0.05), (50, 0.03), (100, 0.01), (500, 0.01)):
+        cb.num_timesteps = step
+        cb._on_step()
+        assert abs(cb.model.ent_coef - expected) < 1e-9
+
+
 def test_action_mix_string():
     """The per-window action histogram prints and resets."""
     from agents.baselines import _ProgressPrinter

@@ -131,11 +131,12 @@ rppo:                        # RecurrentPPO (PPO-LSTM, sb3-contrib) — on-polic
                              # ends all future reward. 0.95 (10 s) was too short for either.
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.05             # HIGH exploration pressure (SB3 default is 0.0). 0.03 was not enough:
-                             # at 3k the deterministic argmax collapsed to FASTER-only, 0 lane
-                             # changes (measured) — the policy must keep trying LANE_LEFT/RIGHT and
-                             # SLOWER long enough for the post-fix reward to make them pay. If the
-                             # 30k argmax still spams cancelling lane requests, drop back to 0.03.
+  ent_coef: 0.05             # exploration pressure at the START of training (SB3 default 0.0).
+                             # 0.03 flat was not enough (argmax collapsed to FASTER-only, 0 lane
+                             # changes) and 0.05 flat was too much (the trained argmax spams
+                             # LANE_LEFT/RIGHT forever — both measured at 3k). So it is SCHEDULED,
+                             # like DQN's ε: linear decay from here to ent_coef_final over the run.
+  ent_coef_final: 0.01       # end-of-training entropy: explore hard early, commit late.
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
@@ -146,12 +147,15 @@ dqn:                         # off-policy value-based baseline
   policy: MlpPolicy
   learning_rate: 0.00025          # lower LR curbs DQN's Q-value overestimation/collapse over the run
   buffer_size: 50000
-  learning_starts: 1000           # fill the buffer with diverse (incl. safe) transitions before learning
+  learning_starts: 500            # buffer seeding; 1000 wasted a third of a 3k run before any learning
   batch_size: 128                 # steadier gradient estimates
   gamma: 0.98                     # same horizon as RecurrentPPO — fair comparison
-  train_freq: 4
-  gradient_steps: 1
-  target_update_interval: 1000    # a stable target network over the run
+  train_freq: 1                   # ONE gradient update per env step (was every 4): the -9 crash
+  gradient_steps: 1               # signal must propagate into Q while ε is still exploring, or the
+                                  # greedy policy reverts to FASTER-only (measured: lane_ch 7.3/ep
+                                  # at ε=0.7 collapsing to 2.6/ep at ε=0.1).
+  target_update_interval: 500     # 1000 gave only 3 target syncs in a 3k run — Q-targets too stale
+                                  # for the crash cost to ever reach the greedy action choice.
   exploration_fraction: 0.6        # ε decays through 60% of the run: uniform-random tries of ALL
                                    # five actions (lanes + speed) persist long enough for their
                                    # Q-values to be grounded before the policy goes greedy
@@ -166,12 +170,12 @@ qrdqn:                       # QR-DQN (sb3-contrib) — off-policy DISTRIBUTIONA
   policy: MlpPolicy
   learning_rate: 0.00025          # same optimiser settings as DQN — the ONLY difference is
   buffer_size: 50000              # the distributional head (fair ablation)
-  learning_starts: 1000
+  learning_starts: 500
   batch_size: 128
   gamma: 0.98
-  train_freq: 4
+  train_freq: 1                   # matched to DQN (see comments there)
   gradient_steps: 1
-  target_update_interval: 1000
+  target_update_interval: 500
   exploration_fraction: 0.6       # identical ε schedule to DQN
   exploration_final_eps: 0.10
   policy_kwargs:

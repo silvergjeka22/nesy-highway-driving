@@ -54,6 +54,25 @@ def resolve_device(cfg):
 _ACTION_LETTERS = ("L", "I", "R", "F", "S")   # LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER
 
 
+class _EntropyDecay(BaseCallback):
+    """Linear ent_coef schedule for RecurrentPPO — the on-policy twin of DQN's ε
+    decay: explore hard early, commit late. SB3 only accepts a fixed ent_coef
+    float, so this decays ``model.ent_coef`` in place each step (a flat high
+    value keeps pushing the trained argmax toward uniform — measured: it spams
+    cancelling LANE_LEFT/RIGHT forever)."""
+
+    def __init__(self, start, end, total_steps):
+        super().__init__()
+        self.start = float(start)
+        self.end = float(end)
+        self.total = max(1, int(total_steps))
+
+    def _on_step(self):
+        frac = min(1.0, self.num_timesteps / self.total)
+        self.model.ent_coef = self.start + frac * (self.end - self.start)
+        return True
+
+
 class _ProgressPrinter(BaseCallback):
     """Print a training line every ``print_freq`` steps and save the best model.
 
@@ -158,7 +177,12 @@ class _ProgressPrinter(BaseCallback):
                     self.model.logger.record("time/total_timesteps", self.num_timesteps)
                     self.model.logger.dump(self.num_timesteps)
                 ot += self._action_mix()
-                extra = f" | eps {self.model.exploration_rate:.3f}" if hasattr(self.model, "exploration_rate") else ""
+                if hasattr(self.model, "exploration_rate"):        # DQN family: ε
+                    extra = f" | eps {self.model.exploration_rate:.3f}"
+                elif isinstance(getattr(self.model, "ent_coef", None), float):   # PPO family: entropy
+                    extra = f" | ent {self.model.ent_coef:.3f}"
+                else:
+                    extra = ""
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
                     self.best_rew = r
@@ -241,7 +265,7 @@ def build_qrdqn(cfg, env, device=None):
     return _build_q_learner(QRDQN, cfg["qrdqn"], cfg, env, device)
 
 
-def _train(cfg, tag, model, env, rollout_steps, path=None):
+def _train(cfg, tag, model, env, rollout_steps, path=None, extra_callbacks=()):
     """Shared training runner: attach the CSV logger, train for the ONE shared
     ``train.total_timesteps`` budget with live progress + best-checkpointing,
     and return the best model."""
@@ -253,7 +277,7 @@ def _train(cfg, tag, model, env, rollout_steps, path=None):
     print(f"[{label}] training for {total} steps on device='{model.device}' "
           f"(printing every {pf} steps)…", flush=True)
     printer = _ProgressPrinter(label, pf, best_path=path, total_steps=total)
-    model.learn(total_timesteps=total, callback=printer)
+    model.learn(total_timesteps=total, callback=[printer, *extra_callbacks])
 
     if printer.saved_best:
         print(f"[{label}] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
@@ -269,7 +293,11 @@ def train_rppo(cfg, path=None):
     """Train the RecurrentPPO baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
     env = _monitored_env(cfg)
-    return _train(cfg, "rppo", build_rppo(cfg, env), env, cfg["rppo"]["n_steps"], path)
+    p = cfg["rppo"]
+    decay = _EntropyDecay(p["ent_coef"], p.get("ent_coef_final", p["ent_coef"]),
+                          cfg["train"]["total_timesteps"])
+    return _train(cfg, "rppo", build_rppo(cfg, env), env, p["n_steps"], path,
+                  extra_callbacks=(decay,))
 
 
 def train_dqn(cfg, path=None):
