@@ -140,6 +140,81 @@ dqn:
   policy_kwargs:
     net_arch: [256, 256]
 
+# =============================================================================
+# PART 1 (off-policy extension) — SAC vs MACURA (ICML 2024) on the hybrid action
+# a = (lane_cmd, speed_cmd): discrete lane choice + CONTINUOUS target speed.
+# Ported faithfully from "Trust the Model Where It Trusts Itself" (Frauenknecht
+# et al., arXiv:2405.19014); only QUANTITIES are scaled to a fast 3k-step GPU
+# run — the algorithmic logic (GJS uncertainty, adaptive κ, pink noise, Eq. 22)
+# is the paper's.
+# =============================================================================
+offpolicy:
+  env:
+    v_range: [15, 30]           # continuous target-speed range for the hybrid action [m/s]
+  shared:
+    total_steps: 3000           # FAST comparison budget (GPU): enough to see which learns
+    warmup_steps: 500           # random-action buffer seeding (paper: initial exploration)
+    epoch_length: 500           # "epoch" for model-data lifetime bookkeeping
+    max_episode_steps: 80       # env horizon (duration 40 s × 2 Hz) — pink-noise sequence length
+    batch_size: 256             # (paper)
+    buffer_size: 30000          # real-env buffer (>= total_steps)
+    gamma: 0.98                 # same horizon as PPO/DQN — fair cross-comparison
+    tau: 0.005                  # (paper)
+    learning_rate: 3.0e-4       # (paper) actor, critics, alpha
+    real_ratio: 0.10            # P(update batch from the REAL buffer) once the model is live
+    grad_clip_norm: 1.0         # numerical safeguard on high-G imagined updates
+  sac:                          # shared SAC backbone (both agents)
+    hidden_dim: 256
+    hidden_layers: 2
+    log_std_min: -20.0
+    log_std_max: 1.0            # capped so exploration noise can't saturate tanh
+    target_entropy: -2.0        # (paper) -dim(A)
+    target_update_interval: 1
+    alpha_init: 0.2
+  sac_baseline:                 # the model-free baseline
+    updates_per_step: 1         # (paper) 1 gradient step per env step
+    exploration: white          # (paper) standard SAC sampling
+    random_warmup: true
+  ensemble:                     # probabilistic dynamics ensemble (MACURA)
+    num_models: 3               # (adapted; paper 7)
+    num_elites: 3
+    hidden_dim: 200             # (paper)
+    hidden_layers: 4            # (paper)
+    learning_rate: 3.0e-4       # (paper)
+    weight_decay: 5.0e-5        # (paper)
+    batch_size: 256
+    validation_ratio: 0.2
+    patience: 5
+    improvement_threshold: 0.01
+    max_epochs: 8               # capped for the fast run (paper: to convergence)
+    min_log_var: -10.0
+    max_log_var: 0.5
+  model_based:                  # Dyna machinery (MACURA)
+    freq_train_model: 200       # retrain ensemble + regenerate rollouts every N env steps
+    effective_rollouts_per_step: 100   # rollout starts per round = this × freq
+    retain_epochs: 1
+    g_max: 10                   # base updates/step; MACURA scales it via Eq. 22
+    max_rollout_length: 5       # T_max
+    obs_clip: 2.0               # imagined states clamp (normalised Kinematics is in [-1,1])
+    reward_clip: 12.0           # imagined reward clamp (our real range ≈ [-9, +5])
+    term_prob_threshold: 0.5    # learned termination head: P(done) above ⇒ terminal
+    term_max_epochs: 20
+    crash_distance: 0.06        # geometric crash test on the predicted next state
+  macura:                       # the paper's own block
+    xi: 1.5                     # threshold scale ξ (the task-tuned knob)
+    zeta: 95                    # ζ-percentile of first-step uncertainties
+    unc_thresh_run_avg_history: 20   # rounds in κ's running average
+    exploration: pink           # (paper) pink noise β=1 — temporally-correlated exploration
+  curriculum:                   # real-data-first ramp (identical for all model-based agents)
+    enabled: true
+    real_ratio_knots:
+      - {step: 0,    real_ratio: 1.00}
+      - {step: 1000, real_ratio: 1.00}
+      - {step: 2000, real_ratio: 0.30}
+      - {step: 3000, real_ratio: 0.10}
+    warmup_exploration: null
+    warmup_exploration_until_step: 1000
+
 eval:
   episodes_per_seed: 5
   deterministic: true

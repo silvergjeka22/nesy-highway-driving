@@ -115,6 +115,59 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
 make_env = create_environment
 
 
+def create_hybrid_environment(cfg, seed=None):
+    """The Part-1 env exposed with a continuous hybrid action, for SAC / MACURA.
+
+    Wraps the standard stack (same reward shaping, overtake counting, monitors)
+    with :class:`HybridAction`: ``a = (lane_cmd, speed_cmd) ∈ [-1, 1]²`` and a
+    flattened ``(25,)`` observation — the interface the continuous off-policy
+    agents (and the MACURA paper's machinery) expect.
+    """
+    return HybridAction(create_environment(cfg, seed=seed), cfg)
+
+
+class HybridAction(gym.Wrapper):
+    """Continuous hybrid action on top of the discrete meta-action env.
+
+    ``a = (lane_cmd, speed_cmd) ∈ [-1, 1]²``:
+      * ``lane_cmd``  < -0.5 → LANE_LEFT | > 0.5 → LANE_RIGHT | else keep lane —
+        the same manoeuvre vocabulary the NeSy shield reasons over.
+      * ``speed_cmd`` → a CONTINUOUS target speed in ``offpolicy.env.v_range``
+        (highway-env's low-level controller tracks ``vehicle.target_speed``
+        directly; the discrete FASTER/SLOWER actions are simply never sent).
+
+    Also flattens the ``(5, 5)`` Kinematics observation to ``(25,)`` — the flat
+    state vector SAC/MACURA train on. All info keys (overtakes, crashed, …)
+    pass through untouched.
+    """
+
+    _LANE_ACTIONS = (0, 1, 2)     # LANE_LEFT, IDLE, LANE_RIGHT
+
+    def __init__(self, env, cfg):
+        super().__init__(env)
+        v_lo, v_hi = cfg["offpolicy"]["env"]["v_range"]
+        self.v_lo, self.v_hi = float(v_lo), float(v_hi)
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        obs_shape = int(np.prod(env.observation_space.shape))
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
+                                                shape=(obs_shape,), dtype=np.float32)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        return np.asarray(obs, dtype=np.float32).reshape(-1), info
+
+    def step(self, action):
+        lane_cmd = float(np.clip(action[0], -1.0, 1.0))
+        speed_cmd = float(np.clip(action[1], -1.0, 1.0))
+        discrete = self._LANE_ACTIONS[0 if lane_cmd < -0.5 else (2 if lane_cmd > 0.5 else 1)]
+        # continuous speed: set the controller target before the manoeuvre step
+        self.env.unwrapped.vehicle.target_speed = \
+            self.v_lo + (speed_cmd + 1.0) / 2.0 * (self.v_hi - self.v_lo)
+        obs, reward, terminated, truncated, info = self.env.step(discrete)
+        return (np.asarray(obs, dtype=np.float32).reshape(-1), reward,
+                terminated, truncated, info)
+
+
 def read_scene(env):
     """Extract an SI-unit scene dict from a (wrapped) highway-env.
 

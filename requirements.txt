@@ -15,3 +15,4 @@ imageio-ffmpeg>=0.4.9     # H.264 encoding for the demo videos
 pandas>=2.0              # metric tables in the notebooks
 matplotlib>=3.7          # plots + rendering frames inline
 pyvirtualdisplay>=3.0    # headless rendering for .mp4 capture (needs apt xvfb)
+colorednoise>=2.2        # pink-noise (1/f) exploration for MACURA (Eberhard et al. 2023)
