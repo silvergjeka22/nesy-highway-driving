@@ -1,78 +1,87 @@
 # TODO — `nesy-highway-driving`
 
-Status tracker for the plan in [`README.md`](README.md). Parts 1 & 2 are the current focus and are
-fully functional; Parts 3 & 4 are scaffolded with explicit open items.
+Status tracker for the plan in [`README.md`](README.md). All four parts are implemented and
+runnable end-to-end; the open items are stretch goals.
 
 ---
 
 ## ✅ Done
 
 ### Part 1 — baseline (highway-env)
-- [x] `make_env` + `read_scene` + reward shaping/overtake-counter wrappers.
-- [x] `train_ppo`, `train_dqn`, `load_model`. Part-1 best is PPO (the recommended baseline), picked directly in the notebook — no selection function.
-- [x] **Training-curve logging** → `metrics/curves/<algo>/progress.csv` (CSV + TensorBoard) and
-      `plot_training_curves` (PPO vs DQN).
-- [x] `evaluate` (crash/on-road/overtakes/return/length) + `plot_eval_comparison` bar chart.
-- [x] `record_video` / `record_random_video` save a **clean MP4** (H.264 + yuv420p, frames padded to
-      a multiple of 16 — no imageio `macro_block_size` warning). → `part1_best.mp4`.
-- [x] **Live training UX**: streaming progress prints (`ep_rew_mean`, steps/s, ETA, first-episode),
-      best-by-reward checkpointing, GPU `device` knob, and **`n_envs` parallel envs (`SubprocVecEnv`)**
-      for a model-free speedup (~3× on multi-core). Best Part-1 model is PPO, picked directly.
-- [x] **Kernel-safe video**: `record_video_safe` renders in a subprocess so a pygame/SDL segfault on
-      headless Colab can't crash the kernel; `_ensure_render_backend` provides a headless display.
+- [x] `create_environment` + `read_scene` + overtake-counter / reward-shaping wrappers.
+- [x] **Aggressive-overtaker reward**: `normalize_reward: false` (speed is the only earner),
+      `overtake_bonus` per pass, one-off `collision_penalty`, 2 Hz decisions
+      (`policy_frequency: 2` — at 1 Hz collision avoidance is unlearnable and the crash rate
+      floors at ~100%), `reward_speed_range: [15, 30]` so braking to dodge still pays a little.
+- [x] `train_ppo` / `train_dqn` (~25k steps each, same budget): live progress lines with
+      **overtakes/ep, overtakes/100 steps and crash %**; the same numbers logged to
+      `metrics/curves/<algo>/progress.csv` and plotted (4-panel training curves).
+- [x] `evaluate` (crash / on-road / overtakes + diagnostics / return / length, live per-seed
+      progress prints) + `plot_eval_comparison`.
+- [x] Best-model pick (lowest crash rate, then most overtakes) → `part1_best.zip` +
+      `part1_best.json` (Parts 2-4 read these).
+- [x] `demo/demo.py`: standalone ≥30s MP4, offscreen, per-episode overtake prints, `[demo] OK/FAIL`.
 
 ### Part 2 — NeSy + XAI (highway-env)
 - [x] **Step A** predicates (`nesy/roadmap.py::predicates`) on the SI scene.
 - [x] **Step B** FSM safety shield (`safety_shield` + `labs/lab3_fsm.py`), zero retraining.
-- [x] **Step C** logic-shaped-reward fine-tune (`finetune_logic_reward` + `LogicRewardWrapper`).
-- [x] Independent MTL monitor (`rule_violations`) → per-rule violation rates (not the agent's reward).
-- [x] **Shield vs no-shield XAI comparison**: four configs (baseline / +shield / +reward /
-      +shield+reward), `plot_violation_rates`, and explicit **best-method selection**
-      (`eval.evaluate.select_nesy_method`). → `part2_nesy.mp4`.
+      RG3 is enforced actively: above the limit the shield forbids IDLE too, forcing deceleration.
+- [x] **Step C** logic-shaped-reward fine-tune (`finetune_logic_reward`, 20k steps — converges).
+- [x] Independent MTL monitor (`rule_violations`) counted on the **post-step** scene.
+- [x] Four-config comparison (baseline / +shield / +reward / +shield+reward) over all six rules,
+      `plot_violation_rates`, explicit `select_nesy_method` pick, `demo.py --shield` video.
+
+### Part 3 — MetaDrive robotics lab
+- [x] `make_env_md` (continuous `(v, ω)` action = `cmd_vel`), `read_scene_md` (same SI scene
+      schema), `read_kin_obs_md` (reconstructed highway observation).
+- [x] The Lab-1 bridge (`nesy_md_action`): discrete model → FSM shield → `manoeuvre_to_cmd_vel`
+      → CBF (Lab 5) + velocity obstacles (Lab 4) → MetaDrive step; overtakes counted on MetaDrive.
+- [x] **Showcase = the second-best Part-1 algorithm** (the safety comes from the symbolic layer).
+- [x] "One rule, three encodings" agreement check (`rule_encoding_agreement`) — runs without
+      MetaDrive.
+- [x] **3D video fixed**: `demo/demo_md.py` uses an exact-size `RGBCamera` (the `main_camera`
+      buffer follows the OS window and can come back short → shape crash) with a chase-view
+      `perceive` and BGR→RGB conversion; GPU runtime for 3D, auto-fallback to top-down on CPU.
+- [x] Setup: condacolab Python-3.10 primary path (one restart), GitHub-main build as the 3.12
+      fallback; warning sources fixed by `pygame-ce` + `jupyter_client>=8.6.2` + removing `gym`.
+
+### Part 4 — race (capstone)
+- [x] Multi-agent race env (`controlled_vehicles=2`, longer `race.duration`).
+- [x] **Per-agent overtake counter** and **per-step per-rule violation accumulation** (was:
+      final-step only), start-slot swap on alternate seeds, shield-intervention rate for B.
+- [x] Scorecard (progress + crashes + violations together, never the winner alone) + race video.
 
 ### Infrastructure
-- [x] **NumPy 2.x fix** — removed the `numpy<2` pin (root cause of the `numpy.dtype size changed` ABI
-      error); `setup_colab.sh` enforces NumPy 2.x; each notebook self-heals + restarts once.
-- [x] `rich` added to `requirements.txt` (needed by `progress_bar=True`).
-- [x] Docs consolidated into `README.md` + this `TODO.md` (removed `project.md`,
-      `ARCHITECTURE_*.md`, `IMPLEMENTATION_PLAN.md`, `nesy/ROADMAP.md`, `nesy/RULES.md`).
+- [x] **Warnings fixed at the source** everywhere; `utils.silence_warnings` deleted, no
+      `filterwarnings('ignore')` in the repo. pygame's `pkg_resources` import is blocked *before*
+      `import gymnasium` (gymnasium's plugin loader imports highway-env → pygame itself).
+- [x] Notebooks share one setup pattern (mount → clone with token → pip install + xvfb);
+      `bash/setup_colab.sh` deleted (nothing used it).
+- [x] Dead code removed: `train_ppo_md`/`build_ppo_md` (fresh-PPO path), `filter_action_md`,
+      `evaluate(action_filter=)`, `metadrive.ppo` config block.
 
 ---
 
-## ⏳ Remaining
+## ⏳ Remaining (stretch)
 
-### Part 3 — MetaDrive (planned)
-- [ ] Confirm the installed-MetaDrive API in `envs/metadrive_factory.py`:
-      - velocity-control hook for `_velocity_to_native` (currently a proportional best-effort map);
-      - neighbour enumeration in `read_scene_md` (traffic-manager attribute names);
-      - offscreen-RGB / lidar config keys.
-- [ ] Intersection predicates (`nesy/roadmap.py::intersection_predicates`) — wire stop-line /
-      traffic-light / priority once MetaDrive exposes them; add FSM states `STOP_SIGN_WAIT`, `YIELD`,
-      `LIGHT_STOP` masks in `labs/lab3_fsm.py`.
-- [ ] Replace the 1-D CBF projection (`labs/lab5_cbf.py`) with the full QP once the Lab-5 API is known.
-- [ ] Run Part 3 under the Python-3.10 `condacolab` path (MetaDrive doesn't build on Colab's 3.12).
-
-### Part 4 — race (planned)
-- [ ] Per-agent overtake counter in the multi-agent env (`eval/race.py::_agent_outcome` returns 0).
-- [ ] Optional MetaDrive MARL race variant (Tier 2) on the Part-3 velocity + CBF/VO stack.
-- [ ] Lane-assignment swap across races to cancel positional bias.
-
-### NeSy stretch (Stages D/E)
-- [ ] **Differentiable logic** — fuzzy / Łukasiewicz predicates as a smooth gradient signal
-      (`predicates` already returns floats where natural).
-- [ ] **Symbolic distillation** — distil the policy into a small human-readable rule set over the
+- [ ] Intersection predicates (`nesy/roadmap.py::intersection_predicates`) — needs a MetaDrive
+      intersection map + stop-line/light/priority state; FSM states `STOP_SIGN_WAIT`/`YIELD`/
+      `LIGHT_STOP` masks are placeholders until then.
+- [ ] Replace the 1-D CBF projection (`labs/lab5_cbf.py`) with the full QP.
+- [ ] `RI3` (U-turn: needs a reference path) and `RI4` (emergency lane: needs a lane-type map).
+- [ ] **Differentiable logic** — fuzzy / Łukasiewicz predicates as a smooth gradient signal.
+- [ ] **Symbolic distillation** — distil the policy into a human-readable rule set over the
       predicates, audited by the independent monitor.
-- [ ] `RI3` (U-turn: needs heading/reference path) and `RI4` (emergency lane: needs lane-type map) —
-      currently stubbed `False`.
+- [ ] Optional MetaDrive MARL race variant (Tier 2) on the Part-3 velocity + CBF/VO stack.
 
 ---
 
 ## 📝 Notes
-- **Run order:** Part 1 → Part 2 (Part 2 loads Part 1's best checkpoint from Drive). Don't start a
-  part before the previous `.mp4` + checkpoint exist on Drive.
-- **Private repo:** notebooks clone via a GitHub token (`GITHUB_TOKEN`); push changes before re-running
-  on Colab, since Colab runs the *cloned* `.py` files, not your local edits.
-- **Don't confound the comparison:** keep Part-1 shaping light; always count violations with the
-  independent monitor, never the reward the agent optimises.
-- **Shield intervention rate** should be low after the Step-C fine-tune — report it; a high rate means
-  the policy still proposes unsafe manoeuvres the shield must veto.
+- **Run order:** Part 1 → Part 2 → Parts 3/4 (each loads the previous checkpoints from Drive).
+- **Private repo:** notebooks clone via a GitHub token; push changes before re-running on Colab,
+  since Colab runs the *cloned* `.py` files, not your local edits. The notebooks currently pull
+  `BRANCH = "part3"` — switch to `main` after merging.
+- **Don't confound the comparison:** always count violations with the independent monitor, never
+  the reward/shield the agent optimises.
+- **Shield intervention rate** is reported in the race; a high rate means the policy still
+  proposes unsafe manoeuvres the shield must veto.

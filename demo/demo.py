@@ -36,31 +36,6 @@ sys.path.insert(0, _REPO)
 
 import numpy as np  # noqa: E402
 
-
-def _enable_cross_numpy_checkpoint_loading():
-    """Let a NumPy 1.x interpreter unpickle a checkpoint saved under NumPy 2.x.
-
-    On Intel macOS the newest available torch is 2.2.2, which requires ``numpy<2``.
-    Checkpoints trained on Colab are pickled under ``numpy>=2``, whose arrays and
-    dtypes reference the private ``numpy._core`` module that does not exist in
-    NumPy 1.x (raising "No module named 'numpy._core'"). Aliasing the old public
-    ``numpy.core`` submodules under the new ``numpy._core`` names lets cloudpickle
-    resolve them. No-op when already on NumPy 2.x.
-    """
-    if not np.__version__.startswith("1."):
-        return
-    import numpy.core as _core
-
-    sys.modules.setdefault("numpy._core", _core)
-    for sub in ("multiarray", "numeric", "umath", "overrides",
-                "_exceptions", "fromnumeric", "_methods"):
-        mod = getattr(_core, sub, None)
-        if mod is not None:
-            sys.modules.setdefault(f"numpy._core.{sub}", mod)
-
-
-_enable_cross_numpy_checkpoint_loading()
-
 from utils import load_config, save_mp4  # noqa: E402
 from envs.highway_factory import create_environment, read_scene  # noqa: E402
 from agents.baselines import load_model, build_ppo, build_dqn  # noqa: E402
@@ -90,7 +65,11 @@ def load_policy_weights(weights_path, algo, cfg):
 
 
 def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
-    """Play episodes until the clip is >= ``min_seconds``, save an MP4, return path."""
+    """Play episodes until the clip is >= ``min_seconds`` and save an MP4.
+
+    Prints one line per episode (overtakes, steps, crash) so the demo visibly
+    proves the policy passes traffic. Returns ``(path, total_overtakes, total_steps)``.
+    """
     fps = cfg["eval"].get("video_fps", 10)
     target_frames = int(min_seconds * fps)
     max_episodes = int(cfg["eval"].get("video_max_episodes", 60))
@@ -98,26 +77,34 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
 
     env = create_environment(cfg, render=True)
     frames = []
+    total_overtakes = total_steps = 0
     try:
         ep = 0
         while len(frames) < target_frames and ep < max_episodes:
-            obs, _ = env.reset(seed=seed0 + ep)
+            obs, info = env.reset(seed=seed0 + ep)
             fsm_state = cfg["fsm"]["initial_state"]
             done = False
+            steps = 0
             while not done:
                 action, _ = model.predict(obs, deterministic=cfg["eval"]["deterministic"])
                 if apply_shield:
                     action, fsm_state = safety_shield(action, predicates(read_scene(env), cfg), fsm_state, cfg)
-                obs, _, terminated, truncated, _ = env.step(action)
+                obs, _, terminated, truncated, info = env.step(action)
                 frame = env.render()
                 if frame is not None:
                     frames.append(np.asarray(frame))
+                steps += 1
                 done = terminated or truncated
+            ot = int(info.get("overtakes", 0))
+            total_overtakes += ot
+            total_steps += steps
+            print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps"
+                  f"{'  (crashed)' if info.get('crashed') else ''}", flush=True)
             ep += 1
     finally:
         env.close()
 
-    return save_mp4(frames, out_path, fps=fps)
+    return save_mp4(frames, out_path, fps=fps), total_overtakes, total_steps
 
 
 def main():
@@ -142,10 +129,12 @@ def main():
     else:
         model = load_model(args.model, args.algo)
     print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
-    path = record(model, cfg, out_path, apply_shield=args.shield, min_seconds=min_seconds)
+    path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield, min_seconds=min_seconds)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
+        print(f"[demo] overtakes: {overtakes} in {steps} steps "
+              f"({100.0 * overtakes / max(1, steps):.1f} per 100 steps)")
         print(f"[demo] OK    {path}  ({size // 1024} KB)")
     else:
         print(f"[demo] FAIL  {out_path}  (no file written or empty)")

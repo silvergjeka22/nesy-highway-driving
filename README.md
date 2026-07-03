@@ -63,41 +63,39 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
 
 | Notebook | Part | What it does | Saved to Drive |
 |---|---|---|---|
-| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN**, log training curves, evaluate + compare, pick the **best** | `part1_best_{tag}.zip` **+ `part1_best.mp4`** (+ `dqn_test.mp4`) + plots |
-| [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, **compare shield vs no-shield**, pick best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
-| [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | port to **MetaDrive** (velocity action, CBF/VO, intersections) | `part3_metadrive.zip` **+ `part3_metadrive.mp4`** |
+| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN** to overtake aggressively, evaluate + compare, pick the **best** | `ppo.zip`/`dqn.zip`/`part1_best.zip` **+ `part1_best.mp4`** + plots |
+| [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, compare the four configs, pick the best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
+| [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | run the **second-best** algorithm on **MetaDrive** via the labs (velocity action, CBF/VO) | metrics + **`part3_metadrive.mp4`** (3D) |
 | [`colab_4_race.ipynb`](notebooks/colab_4_race.ipynb) | **Part 4** | **race** the NeSy agent vs the no-NeSy baseline in one scene | race scorecard **+ `part4_race.mp4`** |
-
-> **Current focus: Parts 1 & 2** (the highway-env baseline + the NeSy/XAI layer). They are fully
-> implemented and runnable end-to-end. Parts 3 & 4 are planned and scaffolded (see
-> [`TODO.md`](TODO.md) for the exact open items).
 
 ### Part 1 — baseline: compare PPO vs DQN, save the best (`colab_1_baseline.ipynb`)
 
-1. **Setup** — mount Drive, run `bash/setup_colab.sh`, load `configs/highway.yaml`.
+1. **Setup** — mount Drive, clone the repo (token prompt), `pip install`, load `configs/highway.yaml`.
 2. **Study & explain the environment** — `highway-v0`, the discrete meta-actions, the `Kinematics`
-   observation (ego + N nearest vehicles, ego-relative, normalised), the reward (native
-   speed/lane-keeping − collision **plus light shaping**: small overtake bonus, small off-road
-   penalty — kept light so it doesn't confound Part 2), and a random-policy clip.
-3. **Train both baselines** on the same env/seeds. Training curves (`ep_rew_mean`, `ep_len_mean` vs
-   timesteps) are logged to `metrics/curves/<algo>/progress.csv` and **plotted PPO-vs-DQN**.
+   observation (ego + N nearest vehicles, ego-relative, normalised), a rendered frame, and a
+   random-policy statistics cell (speeds, rewards, crashes) so the learning problem is concrete.
+3. **The reward is tuned for aggressive overtaking**: `normalize_reward: false` makes the native
+   reward pay *speed only* (≈0 at 20 m/s, 0.5/step at 30 m/s); shaping adds `overtake_bonus` per
+   car passed and a one-off `collision_penalty` per crash. Getting ahead is the only way to earn,
+   crashing the only big cost — the baseline learns to pass traffic and take risks, which is
+   exactly the rule-breaking raw material Part 2 needs.
+4. **Train both baselines** on the same env/seeds/budget (~25k steps — real learning, not a smoke
+   run). The live progress lines and the training curves show **overtakes/episode and crash rate
+   over time** next to the reward, so learning-to-pass is visible as it happens
+   (`metrics/curves/<algo>/progress.csv`).
 
    | Algorithm | Type | Why |
    |---|---|---|
    | **PPO** | on-policy policy-gradient | **recommended**; on-policy avoids replaying stale noisy transitions; clipped objective tolerates shaping; clean credit assignment for multi-step overtakes |
    | **DQN** | off-policy value-based | second baseline; more sample-efficient on discrete actions but more brittle in noisy traffic |
 
-4. **Evaluate + compare** on the same held-out seeds: crash rate, on-road %, overtakes/episode,
-   return, length — mean ± std, side by side, with a **comparison bar chart**. Because crashes cut
-   episodes short, evaluation also reports **overtaking diagnostics** — overtakes per 100 steps,
-   the fraction of episodes with ≥1 overtake, and the max overtakes in an episode — so a low raw
-   count isn't mistaken for "the car never overtakes". `evaluate()` also saves a **≥30s test clip**
-   (`eval.video_seconds`) of each policy driving, for PPO *and* DQN.
-5. **Pick the best** — PPO is the recommended baseline (on-policy, safety-first), so it is marked
-   `part1_best` directly; the same explicit `select:` rule (lowest crash rate within
-   `within_return_pct` of the top return) is reused to rank the NeSy configs in Part 2.
-6. **Save** the best checkpoint, the metrics, the plots, and the ≥30s test videos
-   (`part1_best.mp4` for PPO, `dqn_test.mp4` for DQN) to Drive.
+5. **Evaluate + compare** on the same held-out seeds: crash rate, on-road %, overtakes/episode,
+   return, length — mean ± std, side by side, with a **comparison bar chart** and overtaking
+   diagnostics (overtakes per 100 steps, % episodes with ≥1 pass, max passes) so a crash-shortened
+   episode isn't mistaken for "the car never overtakes".
+6. **Pick the best** (lowest crash rate, then most overtakes) → save `part1_best.zip` +
+   `part1_best.json` (which algorithm won — Parts 2-4 read these), then record the ≥30s
+   **`part1_best.mp4`** with `demo/demo.py` (separate process, prints overtakes while recording).
 
 ### Part 2 — NeSy + XAI: shield vs reward shaping (`colab_2_nesy.ipynb`)
 
@@ -113,29 +111,39 @@ contrasts**, then compares them:
   (RG1 safe gap, RG3 speed limit, RI1 no-stop, stay-on-road) it's replaced with the safest legal
   fallback. *This is the lecture's shielding.*
 - **Step C — Logic-shaped reward fine-tune.** Warm-start from the best checkpoint and continue
-  training (lower LR, fewer steps) on `reward − Σ λ_i·violation_i` over the **soft heuristics**
-  (RI2 passing-right, RG4 impeding flow, RG2 abrupt braking). *This is the lecture's reward shaping.*
+  training (lower LR, `finetune.total_timesteps` ≈ 20k — enough to actually converge) on
+  `reward − Σ λ_i·violation_i` over the **soft heuristics** (RI2 passing-right, RG4 impeding flow,
+  RG2 abrupt braking). *This is the lecture's reward shaping.*
 - **Compare four configs** — *baseline*, *+shield*, *+logic-reward*, *+shield+reward* — with per-rule
   violation rates from the **independent monitor**, plotted, and an explicit **best-method pick**
   (`eval.evaluate.select_nesy_method`: fewest total violations among configs that keep overtaking and
-  don't worsen crashes). Save the NeSy checkpoint, plots, and `part2_nesy.mp4`.
+  don't worsen crashes). The aggressive Part-1 baseline violates the rules *heavily* — the shield
+  crushes the hard-rule rows with zero retraining; the fine-tune teaches the soft ones. Save the
+  NeSy checkpoint, plots, and `part2_nesy.mp4` (`demo/demo.py --shield`).
 
-### Part 3 — MetaDrive (planned: realistic sim + velocity action)
+### Part 3 — MetaDrive robotics lab: the second-best algorithm, made safe by the labs
 
-Ports the validated pipeline to **MetaDrive**: a continuous **velocity `(v, ω)`** action (maps to a
-robot's ROS `cmd_vel`), a **Control Barrier Function** safety filter (Lab 5) + **velocity obstacles**
-(Lab 4) on the command, the **same `predicates()`** via a MetaDrive observation adapter, and
-**intersection rules** (2022 paper). The discrete meta-actions stay the *symbolic vocabulary* — the
-shield reasons over manoeuvres, translated to `(v, ω)`. MetaDrive-specific APIs are scaffolded with
-explicit TODOs; the **CBF ↔ discrete-shield agreement check runs without MetaDrive**.
+Ports the pipeline to **MetaDrive** (continuous control, 3D physics) by running a discrete Part-1
+policy through the robotics labs — deliberately the **second-best** algorithm from Part 1 (DQN if
+PPO won), because the showcase's point is that **the symbolic safety layer, not the policy,
+provides the safety**. The bridge: `read_scene_md` (SI scene adapter) → `read_kin_obs_md`
+(reconstructed highway observation) → model picks a manoeuvre → **FSM shield** → Lab-1
+`manoeuvre_to_cmd_vel` → continuous **velocity `(v, ω)`** (a robot's ROS `cmd_vel`) → **CBF (Lab 5)
++ velocity obstacles (Lab 4)**. The same `predicates()` and rules are reused unchanged; the
+**"one rule, three encodings" agreement check** (MTL predicate ↔ discrete shield mask ↔ CBF
+barrier, all reducing to `gap < safe_distance`) **runs without MetaDrive**. Ends with a ≥30s **3D
+chase-camera video** recorded offscreen (`demo/demo_md.py`, GPU runtime; auto-falls back to
+top-down on CPU). MetaDrive needs Python ≤ 3.11 → the notebook installs the **condacolab
+Python-3.10 runtime** (one kernel restart, then Run all again).
 
-### Part 4 — race: NeSy vs no-NeSy (planned capstone)
+### Part 4 — race: NeSy vs no-NeSy (capstone)
 
 Put both agents in the **same** multi-agent scene and let them race — each overtakes background
-traffic and tries to surpass the other — scoring *who finishes first* **and** *who stays safe and
-rule-compliant under competitive pressure*. **Honest caveat:** a "be ahead" incentive rewards
-aggression, so the scorecard **always** pairs finishing progress with crash + violation metrics,
-never the winner alone.
+traffic and tries to surpass the other — scoring *who gets ahead* (distance, per-agent overtakes)
+**and** *who stays safe and rule-compliant under competitive pressure* (crashes, per-rule violation
+rates, shield interventions). Start slots swap on alternate seeds to cancel positional bias.
+**Honest caveat:** a "be ahead" incentive rewards aggression, so the scorecard **always** pairs
+finishing progress with crash + violation metrics, never the winner alone.
 
 ---
 
@@ -187,22 +195,24 @@ nesy-highway-driving/
 ├── TODO.md                       # done / remaining / notes
 ├── requirements.txt
 ├── utils.py                      # config, seeds, Drive paths, save_mp4, curve_dir
-├── bash/setup_colab.sh           # clone repo + pip install + NumPy 2.x + Drive folders
-├── configs/highway.yaml          # the ONE config: env + ppo + dqn + rules{} + fsm{} + metadrive{} + cbf{} + vo{} + race{}
+├── configs/highway.yaml          # the ONE config: env + shaping + ppo + dqn + rules{} + fsm{} + metadrive{} + cbf{} + vo{} + race{}
 ├── notebooks/                    # the only place code executes
 │   ├── colab_1_baseline.ipynb    # Part 1  -> part1_best.mp4
 │   ├── colab_2_nesy.ipynb        # Part 2  -> part2_nesy.mp4   (XAI)
-│   ├── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4
+│   ├── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4 (3D)
 │   └── colab_4_race.ipynb        # Part 4  -> part4_race.mp4
 ├── envs/
-│   ├── highway_factory.py        # make_env(cfg), read_scene(env), reward wrappers   [Parts 1-2,4]
-│   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), (v,ω)        [Part 3]
-├── agents/baselines.py           # train_ppo/dqn, load_model, finetune_logic_reward, train_ppo_md
+│   ├── highway_factory.py        # create_environment(cfg), read_scene(env), reward wrappers [Parts 1-2,4]
+│   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), the Lab-1 bridge     [Part 3]
+├── agents/baselines.py           # train_ppo/dqn, load_model, finetune_logic_reward
 ├── eval/
-│   ├── evaluate.py               # evaluate(), record_video(), select_nesy_method()
+│   ├── evaluate.py               # evaluate(), evaluate_nesy_md(), select_nesy_method()
 │   ├── plots.py                  # plot_training_curves(), plot_eval_comparison(), plot_violation_rates()
 │   └── race.py                   # make_race_env(), race(), record_race_video()
-├── nesy/roadmap.py               # predicates(), safety_shield(), logic_penalty(), rule_violations()
+├── demo/
+│   ├── demo.py                   # standalone ≥30s video: highway (Parts 1-2, 4-ready), prints overtakes + OK/FAIL
+│   └── demo_md.py                # standalone ≥30s video: MetaDrive 3D / top-down (Part 3)
+├── nesy/roadmap.py               # predicates(), safety_shield(), continuous_shield(), rule_violations()
 ├── labs/                         # lab1_cmd_vel, lab2_lidar_avoidance, lab3_fsm, lab4_velocity_obstacles, lab5_cbf
 └── paper/                        # the temporal-logic traffic-rule PDFs + the XAI/NeSy lecture (.pptx)
 ```
@@ -211,9 +221,16 @@ nesy-highway-driving/
 - **Function-only `.py` files** — no top-level execution; the four notebooks are the only orchestration.
 - **One config YAML** — every quantity lives in `configs/highway.yaml` (incl. all rule parameters);
   nothing is hard-coded.
-- **Colab workflow** — mount Drive → `setup_colab.sh` (clone/pull + `pip install` + Drive folders) →
-  import functions → run → mirror checkpoints/metrics/videos to
+- **Colab workflow** — each notebook mounts Drive, clones the repo (GitHub token prompt), installs
+  `requirements.txt`, then mirrors checkpoints/metrics/videos to
   `/content/drive/MyDrive/nesy-highway-driving/{checkpoints,metrics,videos,metrics/curves}/`.
+- **Videos are standalone scripts** (`demo/demo.py`, `demo/demo_md.py`) run as a subprocess —
+  pygame/panda3d can never crash a notebook kernel; every clip is ≥30 s, prints the overtakes it
+  recorded and ends with `[demo] OK/FAIL`.
+- **Warnings are fixed at the source, never suppressed** — no `filterwarnings('ignore')` anywhere:
+  the legacy `gym` package is uninstalled (its stderr notice), pygame's `pkg_resources` import is
+  blocked before gymnasium loads (its DeprecationWarning), Part 3 installs `pygame-ce` +
+  `jupyter_client>=8.6.2` (their deprecation warnings).
 - **Fixed seeds**, identical eval seeds across algorithms and parts → every comparison is fair.
 
 **Evaluation metrics:** crash rate · on-road % · overtakes/episode (+ overtakes per 100 steps, %
@@ -225,13 +242,14 @@ rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
 ## 7. How to run (Colab)
 
 1. Open a notebook in Colab and **Runtime → Run all**.
-2. Provide a **GitHub token** (Colab `userdata` `GITHUB_TOKEN`, or the hidden prompt) — the repo is
-   private; `setup_colab.sh` clones it, installs deps, and creates the Drive folders.
-3. **NumPy note:** Colab ships NumPy 2.x. The setup keeps NumPy on 2.x; if a stale build was loaded,
-   the first setup cell **restarts the runtime once** automatically — just run all again. (Do *not*
-   pin `numpy<2`; that triggers the `numpy.dtype size changed` ABI error.)
-4. Run Part 1 → Part 2 in order (Part 2 loads Part 1's best checkpoint from Drive). Parts 3–4 are
-   optional/planned.
+2. Provide a **GitHub token** at the hidden prompt (the repo is private); the setup cell clones it
+   and installs the dependencies.
+3. Run the parts in order — each loads the previous part's checkpoints from Drive:
+   **Part 1** (trains `ppo.zip`/`dqn.zip`, saves `part1_best.zip` + `part1_best.json`) →
+   **Part 2** (loads `part1_best`, saves `part2_nesy.zip`) → **Part 3** / **Part 4**.
+4. **Part 3 only:** MetaDrive needs Python ≤ 3.11, so its first cell installs **condacolab
+   (Python 3.10)** and restarts the kernel once — expected; just Run all again. The **3D video
+   needs a GPU runtime** (Runtime → Change runtime type → GPU); on CPU it falls back to top-down.
 
 ---
 

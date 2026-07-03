@@ -1,5 +1,4 @@
-"""RL trainers: PPO/DQN baselines (Part 1), logic-reward fine-tune (Part 2),
-and continuous PPO on MetaDrive (Part 3).
+"""RL trainers: PPO/DQN baselines (Part 1) and the logic-reward fine-tune (Part 2).
 
 Function-only. Each trainer builds one plain env from the config, seeds
 everything, trains a stable-baselines3 model on the resolved device (CPU or
@@ -15,11 +14,20 @@ import numpy as np
 from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
 
 from utils import set_global_seeds, drive_path, curve_dir
 from envs.highway_factory import create_environment
 
 _ALGOS = {"ppo": PPO, "dqn": DQN}
+
+
+def _monitored_env(cfg, logic_reward=False):
+    """One training env, wrapped so each finished episode also records its
+    overtake count and crash flag — that is what lets the progress prints and
+    the training curves show cars-passed-over-time, not just reward."""
+    env = create_environment(cfg, seed=cfg["seed"], logic_reward=logic_reward)
+    return Monitor(env, info_keywords=("overtakes", "crashed"))
 
 
 def resolve_device(cfg):
@@ -42,10 +50,13 @@ def resolve_device(cfg):
 class _ProgressPrinter(BaseCallback):
     """Print a training line every ``print_freq`` steps and save the best model.
 
-    Shows the running mean episode reward + length (from SB3's Monitor buffer) so
-    you can watch learning, and whenever the mean reward improves it checkpoints
-    the model to ``best_path`` — so the saved checkpoint is the best (highest
-    reward) policy seen, not just the final one.
+    Shows the running mean episode reward + length, plus — when the env's Monitor
+    records them — the overtaking progress (cars passed per episode and per 100
+    steps) and the crash rate, so it is obvious whether the agent is learning to
+    pass traffic or just to survive. Whenever the mean reward improves it
+    checkpoints the model to ``best_path`` — so the saved checkpoint is the best
+    (highest reward) policy seen, not just the final one. The same numbers are
+    logged to ``progress.csv`` for the training-curve plots.
     """
 
     def __init__(self, tag, print_freq=200, best_path=None, total_steps=None):
@@ -88,6 +99,14 @@ class _ProgressPrinter(BaseCallback):
             if buf:
                 r = float(np.mean([e["r"] for e in buf]))
                 ln = float(np.mean([e["l"] for e in buf]))
+                ot = ""
+                if "overtakes" in buf[-1]:   # Monitor(info_keywords) provides these
+                    ot_mean = float(np.mean([e["overtakes"] for e in buf]))
+                    ot100 = 100.0 * sum(e["overtakes"] for e in buf) / max(1, sum(e["l"] for e in buf))
+                    crash = float(np.mean([e["crashed"] for e in buf]))
+                    ot = f" | overtakes/ep {ot_mean:4.2f} ({ot100:4.1f}/100 steps) | crash {crash:4.0%}"
+                    self.model.logger.record("rollout/ep_overtakes_mean", ot_mean)
+                    self.model.logger.record("rollout/ep_crash_rate", crash)
                 extra = f" | eps {self.model.exploration_rate:.3f}" if hasattr(self.model, "exploration_rate") else ""
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
@@ -96,8 +115,8 @@ class _ProgressPrinter(BaseCallback):
                     self.saved_best = True
                     flag = "  <- new best, saved"
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
-                      f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f} | "
-                      f"episodes {len(buf)}{extra}{self._speed()}{flag}", flush=True)
+                      f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f}{ot}"
+                      f"{extra}{self._speed()}{flag}", flush=True)
             else:
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
                       f"collecting first episodes…{self._speed()}", flush=True)
@@ -164,7 +183,7 @@ def train_ppo(cfg, path=None):
     """Train the PPO baseline (recommended) and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
     device = resolve_device(cfg)
-    env = create_environment(cfg, seed=cfg["seed"])
+    env = _monitored_env(cfg)
     model = build_ppo(cfg, env, device)
     _attach_logger(model, cfg, "ppo")
 
@@ -189,7 +208,7 @@ def train_dqn(cfg, path=None):
     """Train the DQN baseline (second baseline) and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
     device = resolve_device(cfg)
-    env = create_environment(cfg, seed=cfg["seed"])
+    env = _monitored_env(cfg)
     model = build_dqn(cfg, env, device)
     _attach_logger(model, cfg, "dqn")
 
@@ -243,7 +262,7 @@ def finetune_logic_reward(model, cfg, drive_dir=None):
     """
     set_global_seeds(cfg["seed"])
     ft = cfg["finetune"]
-    env = create_environment(cfg, seed=cfg["seed"], logic_reward=True)
+    env = _monitored_env(cfg, logic_reward=True)
 
     model.set_env(env)
     _to_device(model, cfg)
@@ -267,49 +286,5 @@ def finetune_logic_reward(model, cfg, drive_dir=None):
     else:
         model.save(path)
         print(f"[NESY-FT] done. saved final model -> {path}", flush=True)
-    env.close()
-    return model
-
-
-# =============================================================================
-# Part 3 — continuous PPO on MetaDrive (velocity action)
-# =============================================================================
-def build_ppo_md(cfg, env, device=None):
-    """Construct the continuous-action PPO for MetaDrive from ``cfg['metadrive']['ppo']``."""
-    p = cfg["metadrive"]["ppo"]
-    return PPO(
-        p["policy"], env,
-        learning_rate=p["learning_rate"], n_steps=p["n_steps"],
-        batch_size=p["batch_size"], n_epochs=p["n_epochs"],
-        gamma=p["gamma"], gae_lambda=p["gae_lambda"], clip_range=p["clip_range"],
-        ent_coef=p.get("ent_coef", 0.0), policy_kwargs=p.get("policy_kwargs"),
-        device=device or resolve_device(cfg), seed=cfg["seed"], verbose=0,
-    )
-
-
-def train_ppo_md(cfg, drive_dir=None):
-    """Train PPO with a continuous ``(v, ω)`` head on MetaDrive (same logic as Part 1)."""
-    from envs.metadrive_factory import make_env_md
-
-    set_global_seeds(cfg["seed"])
-    p = cfg["metadrive"]["ppo"]
-    device = resolve_device(cfg)
-    env = make_env_md(cfg, render=False, seed=cfg["seed"])
-    model = build_ppo_md(cfg, env, device)
-    _attach_logger(model, cfg, "part3_metadrive")
-    path = drive_dir or drive_path(cfg, "checkpoints", "part3_metadrive.zip")
-    pf = cfg.get("print_freq", 200)
-    total = _effective_total(p["total_timesteps"], p["n_steps"])
-    print(f"[MD-PPO] training for {total} steps on device='{device}' "
-          f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("MD-PPO", pf, best_path=path, total_steps=total)
-    model.learn(total_timesteps=total, callback=printer)
-
-    if printer.saved_best:
-        print(f"[MD-PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
-        model = PPO.load(path)
-    else:
-        model.save(path)
-        print(f"[MD-PPO] done. saved final model -> {path}", flush=True)
     env.close()
     return model

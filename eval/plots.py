@@ -21,14 +21,17 @@ from utils import curve_dir, drive_path
 def load_curve(cfg, tag):
     """Load one model's training curve from SB3's ``progress.csv``.
 
-    Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean) and
-    ``len`` (ep_len_mean), or ``None`` if the log is missing.
+    Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean),
+    ``len`` (ep_len_mean), ``overtakes`` and ``crash`` (recorded by the training
+    progress callback), or ``None`` if the log is missing.
     """
     csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
         return None
     df = pd.read_csv(csv)
-    cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean", "len": "rollout/ep_len_mean"}
+    cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean",
+            "len": "rollout/ep_len_mean", "overtakes": "rollout/ep_overtakes_mean",
+            "crash": "rollout/ep_crash_rate"}
     out = pd.DataFrame()
     for k, c in cols.items():
         out[k] = df[c] if c in df.columns else np.nan
@@ -36,20 +39,23 @@ def load_curve(cfg, tag):
 
 
 def plot_training_curves(cfg, tags=("ppo", "dqn"), save=True):
-    """Plot mean episode reward + length vs timesteps for each ``tag``.
+    """Reward, episode length, overtakes/episode and crash rate vs timesteps.
 
-    Returns the matplotlib figure; saves ``metrics/training_curves.png`` to Drive.
+    The overtakes panel is the one that shows the agent *learning to pass
+    traffic*; the crash panel shows what that aggression costs. Returns the
+    figure; saves ``metrics/training_curves.png`` to Drive.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    panels = [("rew", "mean episode reward"), ("len", "mean episode length"),
+              ("overtakes", "overtakes per episode"), ("crash", "crash rate")]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
     for tag in tags:
         df = load_curve(cfg, tag)
         if df is None or df.empty:
             continue
-        axes[0].plot(df["t"], df["rew"], marker=".", label=tag.upper())
-        axes[1].plot(df["t"], df["len"], marker=".", label=tag.upper())
-    axes[0].set(title="Training: mean episode reward", xlabel="timesteps", ylabel="ep_rew_mean")
-    axes[1].set(title="Training: mean episode length", xlabel="timesteps", ylabel="ep_len_mean")
-    for ax in axes:
+        for ax, (col, _) in zip(axes.flat, panels):
+            ax.plot(df["t"], df[col], marker=".", label=tag.upper())
+    for ax, (col, title) in zip(axes.flat, panels):
+        ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
         ax.grid(alpha=0.3)
         ax.legend()
     fig.tight_layout()

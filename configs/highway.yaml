@@ -47,42 +47,49 @@ env:
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
-    policy_frequency: 1
+    policy_frequency: 2        # 2 decisions/s. At 1 Hz the car gets ONE decision per second at
+                              # ~25 m/s closing speeds — collision avoidance is unlearnable and
+                              # the crash rate floors at ~100% no matter the penalty (measured).
     simulation_frequency: 10   # quick-run: fewer physics substeps/step (raise to 15 for full)
     collision_reward: -1.0
-    right_lane_reward: 0.0     # was 0.1 — rewarding the rightmost lane biases AGAINST overtaking
+    right_lane_reward: 0.0     # rewarding the rightmost lane biases AGAINST overtaking
                               # (which happens on the left); drop it so all native reward = speed.
-    high_speed_reward: 0.5    # was 0.4 — speed is the prerequisite for overtaking (aggression).
+    high_speed_reward: 0.5    # speed is the prerequisite for overtaking (aggression).
     lane_change_reward: 0.0
-    reward_speed_range: [20, 30]
-    normalize_reward: true
+    reward_speed_range: [15, 30]   # floor BELOW the slowest target speed (20): braking to dodge
+                              # a car still pays a little, so "slow briefly, then pass" is
+                              # learnable; with a floor at 20 braking pays 0 and PPO never brakes.
+    normalize_reward: false   # KEY aggression switch. true squashes the per-step reward into
+                              # [0,1] with a ~0.67 floor for merely existing, which makes "cruise
+                              # slowly, never risk a pass" the global optimum (measured: overtakes
+                              # DROP with more training). false pays speed only (~0.5/step at
+                              # 30 m/s, ~0 at 20 m/s), so getting ahead is the only way to earn —
+                              # the crash cost lives in shaping.collision_penalty below.
     offroad_terminal: true
     render_agent: true
     screen_width: 600
     screen_height: 150
     scaling: 5.5
 
-# Light reward shaping (Part 1). Kept minimal so it does not confound the
-# Part-2 NeSy comparison (the plan's explicit warning).
+# Reward shaping (Part 1): make "get ahead" the dominant behaviour while keeping
+# crashing clearly worse than cruising. The baseline this produces is deliberately
+# AGGRESSIVE (many lane changes/passes) — Part 2 then shows the NeSy layer taming it.
 shaping:
   enabled: true
-  overtake_bonus: 1.5       # each car passed (aggression). Tuned via an A/B/C/D sweep (see below).
+  overtake_bonus: 2.5       # each car passed. ~5 steps of max-speed reward per pass, so passing
+                            # beats sitting behind traffic by a wide margin.
   offroad_penalty: 0.5      # leaving the road is clearly bad.
-  collision_penalty: 1.0    # one-off crash penalty applied OUTSIDE highway-env's reward
-                            # normalization (which squashes its native collision_reward to ~0/step).
-                            # SWEEP RESULT (PPO, 2500 steps): 5.0 made PPO too timid (0.5 overtakes,
-                            # never tries); 1.0 unlocks overtaking (1.25 overtakes) while keeping most
-                            # episodes crash-free. It's the aggression<->safety dial: raise toward 3-5
-                            # to trade overtakes for fewer crashes, lower toward 0.5 for more aggression.
-                            # NOTE: this floor-keeping config needs normalize_reward:true (env.config);
-                            # normalize_reward:false makes it fast but ~100% crash at short budgets.
+  collision_penalty: 8.0    # one-off crash penalty (applied on top of the native -1). With
+                            # normalize_reward:false a crash must outweigh the speed earned
+                            # by a reckless final sprint (~16 steps at 0.5/step) — this is the
+                            # aggression<->safety dial: lower -> more crashes, higher -> timid.
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 20000 #150000   # LOWER-LIMIT fair-comparison budget: below ~20k DQN just collapses
-                                   # (100% crash) so the PPO-vs-DQN comparison is meaningless. 20k is the
-                                   # minimum where BOTH show real learning; use 50000+ for a definitive
-                                   # comparison, 150000 for the best policy. PPO & DQN share this budget.
+  total_timesteps: 25000 #150000   # minimal-but-real budget: enough for PPO to learn overtake-without-
+                                   # crashing under the aggressive reward (below ~20k DQN just collapses
+                                   # to 100% crash and the comparison is meaningless). 150000 for the
+                                   # best policy. PPO & DQN share this budget (fair comparison).
   learning_rate: 0.0005
   n_steps: 512               # rollout length before each update (standard for a real run)
   batch_size: 256
@@ -98,7 +105,7 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 20000 #150000   # SAME budget as PPO (fair comparison). Lower limit for real DQN
+  total_timesteps: 25000 #150000   # SAME budget as PPO (fair comparison). Lower limit for real DQN
                                    # learning; below ~20k it collapses to a trivial always-accelerate policy.
   learning_rate: 0.00025          # lower LR curbs DQN's Q-value overestimation/collapse over the run
   buffer_size: 50000
@@ -190,9 +197,10 @@ fsm:
   emergency_gap: 8.0        # below this -> EMERGENCY_STOP [m]
 
 # Warm-start fine-tune for the logic-shaped reward (Step C). Lower LR, fewer
-# steps than Part 1 — the genuine "fine-tune".
+# steps than Part 1 — the genuine "fine-tune". 20k is enough for the soft-rule
+# penalties (RI2/RG4/RG2) to visibly converge; 1000 was only ever a smoke run.
 finetune:
-  total_timesteps: 1000      # quick smoke run for now (raise to ~60000 for a full fine-tune)
+  total_timesteps: 20000     # raise to ~60000 for the fullest fine-tune
   learning_rate: 0.0001
 
 # =============================================================================
@@ -210,23 +218,10 @@ metadrive:
   v_max: 10.0               # max commandable linear speed [m/s] (robot scale)
   omega_max: 0.6            # max angular speed [rad/s]
   lidar_num_lasers: 72
-  # Offscreen top-down video (demo/demo_md.py) — CPU pygame renderer, no GPU.
+  # Video (demo/demo_md.py): 3D chase camera on a GPU runtime, else CPU top-down.
   video_seconds: 30         # clip length (>= 30 s required)
   video_fps: 20             # MetaDrive steps ~ 10 Hz control; 20 fps keeps it smooth
-  video_size: [800, 800]    # top-down film/screen size [px]
-  ppo:
-    policy: MlpPolicy
-    total_timesteps: 2000 #300000   # smoke default; raise to 300000 for a real policy
-    learning_rate: 0.0003
-    n_steps: 2048
-    batch_size: 256
-    n_epochs: 10
-    gamma: 0.99
-    gae_lambda: 0.95
-    clip_range: 0.2
-    ent_coef: 0.0
-    policy_kwargs:
-      net_arch: [256, 256]
+  video_size: [800, 800]    # camera window / top-down film size [px]
 
 # Control Barrier Function (Lab 5) — continuous safety filter on (v, omega).
 # Robot-scale thresholds (MetaDrive's (v, omega)); the RG1 barrier itself reuses the
@@ -250,8 +245,9 @@ vo:
 # PART 4 — head-to-head race: baseline agent vs NeSy agent
 # =============================================================================
 race:
-  seeds: [2000, 2001, 2002, 2003, 2004]
-  horizon: 1000
+  seeds: [2000, 2001, 2002, 2003, 2004, 2005]   # even count: start slots swap on alternate seeds
+  duration: 60              # race length [s] — longer than Part 1's episodes so there is room to pass
+  horizon: 1000             # hard safety cap on steps per race
   winner_metric: distance   # "distance" travelled, or "overtakes"
   video_seconds: 30
   sim: highway              # "highway" (Parts 1-2 models) or "metadrive"

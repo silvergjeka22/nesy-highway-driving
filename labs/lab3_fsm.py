@@ -70,9 +70,15 @@ def admissible_actions(state, preds, cfg):
 
     allowed = list(ALL_ACTIONS)
 
-    # RG1 + RG3: gate acceleration.
-    if preds.get("too_close") or preds.get("over_speed_limit"):
+    # RG1: gate acceleration on the leader gap.
+    if preds.get("too_close"):
         _drop(allowed, "FASTER")
+
+    # RG3: above the legal limit the car must actually decelerate — vetoing only
+    # FASTER would let it cruise at an illegal speed forever (IDLE keeps speed).
+    if preds.get("over_speed_limit"):
+        _drop(allowed, "FASTER")
+        _drop(allowed, "IDLE")
 
     # RG1: gate lane changes on the target-lane safe gap.
     if not preds.get("safe_gap_left"):

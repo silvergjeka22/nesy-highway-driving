@@ -182,24 +182,6 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
     return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
 
 
-def filter_action_md(action, scene, cfg):
-    """Apply the continuous CBF/VO shield to a normalised ``(v_norm, ω_norm)`` action.
-
-    Decodes the action to SI ``(v, ω)``, runs ``nesy.roadmap.continuous_shield``
-    (CBF + velocity obstacles — the same hard rules as the discrete shield), and
-    re-encodes to the normalised action the env expects. Used as ``evaluate``'s
-    ``action_filter`` and by ``demo/demo_md.py``, so the "+CBF/VO" config enforces
-    the hard rules on the continuous command.
-    """
-    from nesy.roadmap import continuous_shield
-
-    md = cfg["metadrive"]
-    v_cmd = float(action[0]) * md["v_max"]
-    omega_cmd = float(action[1]) * md["omega_max"]
-    (v, omega), _ = continuous_shield(v_cmd, omega_cmd, scene, cfg)
-    return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32)
-
-
 def read_scene_md(env):
     """Extract the common SI scene dict from a MetaDrive env.
 
@@ -246,3 +228,27 @@ def _neighbours(u, ego):
         # Fallback: keep objects that quack like a vehicle (have a lane_index).
         return [o for o in objs if o is not ego and hasattr(o, "lane_index")
                 and hasattr(o, "velocity")]
+
+
+def count_passes_md(env, ahead_ids):
+    """Overtake tracking on MetaDrive: vehicles that move from ahead of the ego
+    to behind it along the road (+x on the straight ``SSSS`` map) count once.
+
+    Returns ``(passed_this_step, new_ahead_ids)`` — same bookkeeping as the
+    highway ``OvertakeCounter``, keyed by MetaDrive object names.
+    """
+    u = env.unwrapped
+    ego = u.agent
+    ex = float(ego.position[0])
+    passed = 0
+    still = set()
+    for o in _neighbours(u, ego):
+        oid = getattr(o, "name", None) or id(o)
+        if oid in ahead_ids:
+            if float(o.position[0]) < ex:
+                passed += 1
+            else:
+                still.add(oid)
+        elif float(o.position[0]) > ex:
+            still.add(oid)
+    return passed, still

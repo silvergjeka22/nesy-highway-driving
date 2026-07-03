@@ -27,7 +27,7 @@ _RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 # Single-model evaluation (Parts 1-3)
 # =============================================================================
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
-             env_fn=None, scene_fn=None, action_filter=None):
+             env_fn=None, scene_fn=None):
     """Evaluate ``model`` over held-out seeds and aggregate metrics (no rendering).
 
     Args:
@@ -38,9 +38,6 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
         count_violations: report per-rule violation rates (independent monitor).
         env_fn: builder ``(cfg, render) -> env``; defaults to highway.
         scene_fn: ``env -> scene dict``; defaults to highway ``read_scene``.
-        action_filter: optional ``(action, scene, cfg) -> action`` applied to the
-            raw policy action (Part 3 continuous CBF/VO filter). Mutually exclusive
-            with ``apply_shield`` (which is for the discrete action set).
 
     Returns:
         dict with ``summary`` (headline metrics + overtaking diagnostics, and
@@ -54,7 +51,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
     env = env_fn(cfg, False)
     rows = []
     try:
-        for seed in seeds:
+        for i, seed in enumerate(seeds):
             for ep in range(ec["episodes_per_seed"]):
                 rows.append(_run_episode(
                     model, env, int(seed) * 100 + ep, cfg,
@@ -62,16 +59,27 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
                     apply_shield=apply_shield,
                     count_violations=count_violations,
                     scene_fn=scene_fn,
-                    action_filter=action_filter,
                 ))
+            _print_eval_progress(rows, i + 1, len(seeds))
     finally:
         env.close()
 
     return {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
 
 
+def _print_eval_progress(rows, seeds_done, seeds_total):
+    """Running one-liner so a long evaluation shows the overtaking/crash picture live."""
+    n = len(rows)
+    ot = sum(r["overtakes"] for r in rows)
+    steps = sum(r["length"] for r in rows)
+    crashes = sum(1 for r in rows if r["crashed"])
+    print(f"[eval] seed {seeds_done:>2}/{seeds_total} | {n:>3} episodes | "
+          f"overtakes/ep {ot / n:4.2f} ({100.0 * ot / max(1, steps):4.1f}/100 steps) | "
+          f"crash {crashes / n:4.0%}", flush=True)
+
+
 def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
-                 count_violations, scene_fn, action_filter=None):
+                 count_violations, scene_fn):
     from nesy.roadmap import predicates, safety_shield, rule_violations
 
     obs, info = env.reset(seed=seed)
@@ -85,12 +93,10 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
 
-        # The shield/filter decides from the CURRENT (pre-action) state.
+        # The shield decides from the CURRENT (pre-action) state.
         if apply_shield:
             preds = predicates(scene_fn(env), cfg)
             action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
-        elif action_filter is not None:
-            action = action_filter(action, scene_fn(env), cfg)
 
         obs, reward, terminated, truncated, info = env.step(action)
 
@@ -196,20 +202,23 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
 
 
 def _run_nesy_md_episode(model, env, seed, cfg, shield):
-    from envs.metadrive_factory import read_scene_md, nesy_md_action
+    from envs.metadrive_factory import read_scene_md, nesy_md_action, count_passes_md
     from nesy.roadmap import predicates, rule_violations
 
     obs, info = env.reset(seed=seed)
     fsm = cfg["fsm"]["initial_state"]
+    _, ahead = count_passes_md(env, set())     # prime the overtake tracker
     done = False
     ret = 0.0
-    steps = offroad_steps = 0
+    steps = offroad_steps = overtakes = 0
     viol = {k: 0 for k in _RULES}
     speed_sum = 0.0
 
     while not done:
         action, fsm = nesy_md_action(model, env, cfg, fsm, shield)   # Lab-1 bridge step
         obs, reward, terminated, truncated, info = env.step(action)
+        passed, ahead = count_passes_md(env, ahead)
+        overtakes += passed
         sc = read_scene_md(env)
         for k, val in rule_violations(predicates(sc, cfg), cfg).items():
             viol[k] += int(val)
@@ -224,7 +233,7 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
     return {
         "seed": seed, "crashed": crashed,
         "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
-        "overtakes": 0, "return": ret, "native_return": ret, "length": steps,
+        "overtakes": int(overtakes), "return": ret, "native_return": ret, "length": steps,
         "violations": viol, "viol_steps": steps,
         "mean_speed": speed_sum / steps if steps else 0.0,
     }
