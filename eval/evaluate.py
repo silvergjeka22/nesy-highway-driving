@@ -128,6 +128,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     steps = offroad_steps = 0
     viol = {k: 0 for k in _RULES}
     speed_sum = 0.0
+    x_start = float(scene_fn(env)["ego"]["x"])   # forward-distance origin [m]
 
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
@@ -171,6 +172,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
         "return": ret,
         "native_return": native_ret,
         "length": steps,
+        "distance": float(scene_fn(env)["ego"]["x"]) - x_start,   # forward progress [m]
     }
     if count_violations:
         row["violations"] = viol
@@ -193,6 +195,7 @@ def _summarise(rows, count_violations):
         "return": ms("return"),
         "native_return": ms("native_return"),
         "length": ms("length"),
+        "distance": ms("distance"),
     }
 
     # Overtaking diagnostics — episodes are cut short by crashes, so the raw
@@ -253,6 +256,7 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
     obs, info = env.reset(seed=seed)
     fsm = cfg["fsm"]["initial_state"]
     _, ahead = count_passes_md(env, set())     # prime the overtake tracker
+    x_start = float(read_scene_md(env)["ego"]["x"])
     done = False
     ret = 0.0
     steps = offroad_steps = overtakes = 0
@@ -279,6 +283,7 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
         "seed": seed, "crashed": crashed,
         "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
         "overtakes": int(overtakes), "return": ret, "native_return": ret, "length": steps,
+        "distance": float(read_scene_md(env)["ego"]["x"]) - x_start,
         "violations": viol, "viol_steps": steps,
         "mean_speed": speed_sum / steps if steps else 0.0,
     }

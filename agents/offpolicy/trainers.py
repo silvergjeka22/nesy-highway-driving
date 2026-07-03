@@ -8,11 +8,12 @@ MACURA-specific κ and imagined-data share. ``as_predictor`` wraps a trained age
 in the SB3 ``.predict`` interface so ``evaluate`` / ``sanity_rollout`` / the demo
 work unchanged.
 """
+import os
 import time
 
 import numpy as np
 
-from utils import set_global_seeds, drive_path
+from utils import set_global_seeds, drive_path, curve_dir
 from envs.highway_factory import create_hybrid_environment
 from agents.baselines import resolve_device
 from agents.offpolicy.sac import SAC
@@ -38,27 +39,40 @@ def build_offpolicy(cfg, algo, device=None):
     return agent
 
 
-def train_offpolicy(cfg, algo, path=None):
+def train_offpolicy(cfg, algo, path=None, tag=None):
     """Train SAC or MACURA on the hybrid-action highway env; returns the agent.
 
     The loop is the paper's: ``warmup_steps`` random actions seed the buffer, then
     the agent acts with its paper exploration noise (MACURA: pink β=1, SAC: white),
     stores every real transition, and calls ``update_step`` each step (for MACURA
     that includes ensemble retraining + uncertainty-truncated imagined rollouts).
+
+    ``tag`` names the checkpoint and the training-curve folder (defaults to
+    ``algo``) — pass e.g. ``tag="macura_tl"`` for the dual-stopping variant so its
+    curves/checkpoint don't overwrite plain MACURA's.
     """
     op = cfg["offpolicy"]
     sh = op["shared"]
     set_global_seeds(cfg["seed"])
     device = resolve_device(cfg)
-    tag = algo.upper()
+    tag = (tag or algo).lower()
+    label = tag.upper()
 
     env = create_hybrid_environment(cfg, seed=cfg["seed"])
     agent = build_offpolicy(cfg, algo, device)
-    path = path or drive_path(cfg, "checkpoints", algo)
+    path = path or drive_path(cfg, "checkpoints", tag)
     total = int(sh["total_steps"])
     warmup = int(sh["warmup_steps"])
     pf = int(cfg.get("print_freq", 200))
-    print(f"[{tag}] training for {total} steps (warmup {warmup} random) on device='{device}' "
+
+    # Training curve, same columns the PPO/DQN trainers log — so
+    # eval.plots.plot_training_curves works on SAC/MACURA tags unchanged.
+    csv_path = os.path.join(curve_dir(cfg, tag), "progress.csv")
+    with open(csv_path, "w") as f:
+        f.write("time/total_timesteps,rollout/ep_rew_mean,rollout/ep_len_mean,"
+                "rollout/ep_overtakes_mean,rollout/ep_crash_rate\n")
+
+    print(f"[{label}] training for {total} steps (warmup {warmup} random) on device='{device}' "
           f"| exploration={getattr(agent.policy if hasattr(agent, 'policy') else agent, 'exploration', '?')}",
           flush=True)
 
@@ -98,6 +112,8 @@ def train_offpolicy(cfg, algo, path=None):
             ot = float(np.mean([e["overtakes"] for e in ep_hist]))
             ot100 = 100.0 * sum(e["overtakes"] for e in ep_hist) / max(1, sum(e["l"] for e in ep_hist))
             crash = float(np.mean([e["crashed"] for e in ep_hist]))
+            with open(csv_path, "a") as f:
+                f.write(f"{step},{r:.4f},{ln:.2f},{ot:.4f},{crash:.4f}\n")
             sps = step / max(time.time() - t0, 1e-6)
             extra = ""
             if "kappa" in metrics:
@@ -111,14 +127,14 @@ def train_offpolicy(cfg, algo, path=None):
                 best_rew = r
                 agent.save(path)
                 flag = "  <- new best, saved"
-            print(f"[{tag}] step {step:>6} | ep_rew_mean {r:7.2f} | ep_len_mean {ln:5.1f} | "
+            print(f"[{label}] step {step:>6} | ep_rew_mean {r:7.2f} | ep_len_mean {ln:5.1f} | "
                   f"overtakes {total_overtakes} total, {ot:4.2f}/ep ({ot100:4.1f}/100 steps) | "
                   f"crash {crash:4.0%}{extra} | {sps:4.0f} steps/s"
                   f" | ETA {(total - step) / max(sps, 1e-6) / 60:4.1f} min{flag}", flush=True)
 
     if best_rew == -float("inf"):
         agent.save(path)
-    print(f"[{tag}] done. best ep_rew_mean={best_rew:.2f} -> {path}_policy.pt", flush=True)
+    print(f"[{label}] done. best ep_rew_mean={best_rew:.2f} -> {path}_policy.pt", flush=True)
     env.close()
     return agent
 

@@ -43,7 +43,9 @@ env:
     action:
       type: DiscreteMetaAction
     lanes_count: 4
-    vehicles_count: 25        # quick-run: fewer NPCs = faster stepping (raise to ~50 for full)
+    vehicles_count: 25        # quick-run: fewer NPCs = faster stepping. Raise to ~50 (denser,
+                              # harder traffic — much more to pass) for the FULL run, together
+                              # with offpolicy.shared.total_steps 20-30k.
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
@@ -156,8 +158,10 @@ offpolicy:
   env:
     v_range: [15, 30]           # continuous target-speed range for the hybrid action [m/s]
   shared:
-    total_steps: 5000           # FAST comparison budget (GPU ~6 min): the crash rate is still
-                                # falling steeply at 3k — 5k lets the transition finish
+    total_steps: 3000           # FAST shakeout budget (GPU ~4 min) so both algorithms' learning
+                                # is visible quickly. For the full dense comparison raise this to
+                                # 20000-30000 AND env.config.vehicles_count to ~50 together —
+                                # dense traffic at a tiny budget just floors both at ~100% crash.
     warmup_steps: 500           # random-action buffer seeding (paper: initial exploration)
     epoch_length: 500           # "epoch" for model-data lifetime bookkeeping
     max_episode_steps: 80       # env horizon (duration 40 s × 2 Hz) — pink-noise sequence length

@@ -77,8 +77,9 @@ def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
     names = list(metrics_by_name)
     panels = [
         ("crash_rate", lambda s: s["crash_rate"], None),
-        ("return (mean)", lambda s: s["return"]["mean"], lambda s: s["return"]["std"]),
+        ("distance (m)", lambda s: s["distance"]["mean"], lambda s: s["distance"]["std"]),
         ("overtakes (mean)", lambda s: s["overtakes"]["mean"], lambda s: s["overtakes"]["std"]),
+        ("return (mean)", lambda s: s["return"]["mean"], lambda s: s["return"]["std"]),
         ("on_road %", lambda s: s["on_road_pct"]["mean"], lambda s: s["on_road_pct"]["std"]),
     ]
     fig, axes = plt.subplots(1, len(panels), figsize=(4 * len(panels), 4))
