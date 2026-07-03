@@ -85,9 +85,14 @@ env:
 # AGGRESSIVE (many lane changes/passes) — Part 2 then shows the NeSy layer taming it.
 shaping:
   enabled: true
-  overtake_bonus: 3.0       # each car passed. ~6 steps of max-speed reward per pass: an 80-step
-                            # episode that passes 4 cars earns ~48 vs ~13 for sitting behind a
-                            # slow leader — staying behind is clearly the worst legal strategy.
+  overtake_bonus: 5.0       # each car passed. THE aggression dial after the crash-sprint fix:
+                            # at 3.0 the 30k run converged to "hide in the left lane at 20 m/s"
+                            # (measured: crash 100%→50% ✓ but passes fell 6.6→1.6/100 steps —
+                            # risk-free camping earned ~15/episode, more than risky passing).
+                            # At 5.0 one pass outearns ~30 camping steps, so committed passes
+                            # dominate hiding while raw speed still pays little (the crash-
+                            # sprint stays closed). Crash creeping >60% -> drop toward 4.0;
+                            # still camping -> raise toward 6.0.
   lane_change_bonus: 1.0    # paid ONLY when a lane change escapes a blocked lane (slow leader
                             # within 25 m) — the first link of the overtaking chain. Without any
                             # bonus the policy never changes lanes (measured: 0 changes); a flat
