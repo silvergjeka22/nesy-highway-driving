@@ -156,7 +156,8 @@ offpolicy:
   env:
     v_range: [15, 30]           # continuous target-speed range for the hybrid action [m/s]
   shared:
-    total_steps: 3000           # FAST comparison budget (GPU): enough to see which learns
+    total_steps: 5000           # FAST comparison budget (GPU ~6 min): the crash rate is still
+                                # falling steeply at 3k — 5k lets the transition finish
     warmup_steps: 500           # random-action buffer seeding (paper: initial exploration)
     epoch_length: 500           # "epoch" for model-data lifetime bookkeeping
     max_episode_steps: 80       # env horizon (duration 40 s × 2 Hz) — pink-noise sequence length
@@ -172,7 +173,11 @@ offpolicy:
     hidden_layers: 2
     log_std_min: -20.0
     log_std_max: 1.0            # capped so exploration noise can't saturate tanh
-    target_entropy: -2.0        # (paper) -dim(A)
+    target_entropy: -4.0        # (deviation from the paper's -dim(A)=-2: with a 2-D action and
+                                # a tiny budget, -2 keeps the policy so wide that its deterministic
+                                # MEAN stays central = mid-speed, no committed lane changes
+                                # (measured: stochastic 1.3 passes/ep, deterministic 0). -4 anneals
+                                # α faster so the mean commits within the fast run.
     target_update_interval: 1
     alpha_init: 0.2
   sac_baseline:                 # the model-free baseline
@@ -199,12 +204,27 @@ offpolicy:
     retain_epochs: 1
     g_max: 20                   # base updates/step; MACURA scales it via Eq. 22 (paper uses 10-30;
                                 # 20 gives the 3k fast run enough imagined gradient steps to matter)
-    max_rollout_length: 5       # T_max
+    max_rollout_length: 8       # T_max — a FULL overtake (approach → pull out → pass →
+                                # return) takes ~6-10 imagined steps; at 5 imagination could
+                                # never contain one complete profitable pass (paper uses 10)
     obs_clip: 2.0               # imagined states clamp (normalised Kinematics is in [-1,1])
     reward_clip: 12.0           # imagined reward clamp (our real range ≈ [-9, +5])
     term_prob_threshold: 0.5    # learned termination head: P(done) above ⇒ terminal
     term_max_epochs: 20
-    crash_distance: 0.06        # geometric crash test on the predicted next state
+    # Imagined-crash test, matched to OUR observation (5 features/vehicle; highway-env
+    # normalises x by ±200 m and y by ±16 m, so overlap needs per-axis thresholds):
+    features_per_vehicle: 5
+    crash_x_distance: 0.03      # |Δx| < ~6 m (car length + margin), normalised
+    crash_y_distance: 0.13      # |Δy| < ~2 m (same lane), normalised
+    overtake_reward: 3.0        # imagined passes are priced at the KNOWN overtake bonus —
+                                # the Gaussian reward blurs the rare +3 spike exactly like the
+                                # crash spike, so in imagination overtaking paid NOTHING and
+                                # MACURA rationally learned to stay behind traffic (measured)
+    crash_reward: -9.0          # imagined crashes are priced at the KNOWN collision cost
+                                # (native -1 + shaping.collision_penalty 8): the learned
+                                # Gaussian reward blurs this rare spike away, which taught
+                                # the policy that crashing in imagination is cheap (measured:
+                                # crash rate ROSE to 98% as the imagined share ramped up)
   macura:                       # the paper's own block
     xi: 1.5                     # threshold scale ξ (the task-tuned knob)
     zeta: 95                    # ζ-percentile of first-step uncertainties

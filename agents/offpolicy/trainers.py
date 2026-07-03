@@ -96,7 +96,8 @@ def train_offpolicy(cfg, algo, path=None):
             extra = ""
             if "kappa" in metrics:
                 extra = (f" | κ {metrics['kappa']:.3f} | imag {metrics.get('imagined_pct', 0):.0f}%"
-                         f" | depth {metrics.get('rollout_depth_mean', 0):.1f}")
+                         f" | depth {metrics.get('rollout_depth_mean', 0):.1f}"
+                         f" | term {metrics.get('model_term_frac', 0):.1%}")
             flag = ""
             if r > best_rew and step > warmup:
                 best_rew = r

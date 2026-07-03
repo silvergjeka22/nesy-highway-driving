@@ -118,6 +118,21 @@ class GaussianEnsemble:
         # crash is far closer, so this only cuts genuine imminent collisions and cannot
         # over-truncate. Tune UP if term% stays ~0, DOWN if rollout depth collapses.
         self.crash_distance  = float(cfg_mb.get("crash_distance", 0.04))
+        # Layout- and scale-aware crash test (see step()): our Kinematics obs is
+        # n_veh × features_per_vehicle with [presence, x, y, ...] rows, and highway-env
+        # normalises x by ±200 m but y by ±16 m — so "vehicle overlap" needs separate
+        # per-axis thresholds, not one isotropic distance.
+        self.features_per_vehicle = int(cfg_mb.get("features_per_vehicle", 7))
+        self.crash_x = cfg_mb.get("crash_x_distance")     # None → legacy isotropic test
+        self.crash_y = cfg_mb.get("crash_y_distance")
+        # Imagined crashes get the KNOWN collision reward (the learned Gaussian blurs
+        # the rare −9 spike into the smooth background, which teaches recklessness).
+        self.crash_reward = cfg_mb.get("crash_reward")    # None → keep the sampled reward
+        # Imagined PASSES get the KNOWN overtake bonus — the same blurring erases the
+        # rare +3 spike, so in imagination overtaking paid nothing and the policy
+        # (rationally) learned to stay behind traffic. Detected as the number of
+        # present vehicles ahead of the ego decreasing across the imagined step.
+        self.overtake_reward = cfg_mb.get("overtake_reward")   # None → off
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -328,17 +343,39 @@ class GaussianEnsemble:
         # the learned head ALONE fired ~0% because crashes are rare and the BCE head
         # under-predicts. Both are SEPARATE from the GJS Gaussian, so the uncertainty
         # mechanism and κ are completely untouched.
-        # Layout: n_veh×7 features [presence, rel_x, rel_y, ...] per vehicle; row 0 is
-        # the ego, rows 1: are the other vehicles. (S//7)*7 keeps whole 7-feature rows.
+        # Layout: n_veh × features_per_vehicle rows of [presence, rel_x, rel_y, ...];
+        # row 0 is the ego, rows 1: the neighbours (ego-relative). Whole rows only.
+        F       = self.features_per_vehicle
         S       = next_states.shape[1]
-        kin_dim = (S // 7) * 7
-        kin     = next_states[:, :kin_dim].reshape(next_states.shape[0], -1, 7)
-        others  = kin[:, 1:, :]                                   # (B, n_veh-1, 7)
+        kin_dim = (S // F) * F
+        kin     = next_states[:, :kin_dim].reshape(next_states.shape[0], -1, F)
+        others  = kin[:, 1:, :]                                   # (B, n_veh-1, F)
         present = others[:, :, 0] > 0.5
-        dist    = torch.sqrt(others[:, :, 1] ** 2 + others[:, :, 2] ** 2)
-        crash   = ((dist < self.crash_distance) & present).any(dim=1)   # (B,)
+        if self.crash_x is not None and self.crash_y is not None:
+            # per-axis overlap test — matches the env's real crash condition under
+            # highway-env's anisotropic normalisation (x: ±200 m, y: ±16 m)
+            crash = ((others[:, :, 1].abs() < float(self.crash_x))
+                     & (others[:, :, 2].abs() < float(self.crash_y))
+                     & present).any(dim=1)                        # (B,)
+        else:                                                     # legacy isotropic test
+            dist  = torch.sqrt(others[:, :, 1] ** 2 + others[:, :, 2] ** 2)
+            crash = ((dist < self.crash_distance) & present).any(dim=1)
         learned = torch.sigmoid(self.term_net(x_n)).squeeze(-1) > self.term_threshold
         done    = crash | learned
+        # price imagined crashes at the KNOWN collision reward — the single event the
+        # learned Gaussian reward systematically underprices
+        if self.crash_reward is not None:
+            rewards = torch.where(crash, torch.full_like(rewards, float(self.crash_reward)), rewards)
+        # price imagined PASSES at the KNOWN overtake bonus (same blurring problem,
+        # opposite sign): neighbours are ego-relative, so "ahead" = rel_x > 0; a pass
+        # = the count of present vehicles ahead dropping across the step.
+        if self.overtake_reward is not None:
+            kin_t     = states[:, :kin_dim].reshape(states.shape[0], -1, F)[:, 1:, :]
+            present_t = kin_t[:, :, 0] > 0.5
+            ahead_t   = ((kin_t[:, :, 1] > 0.0) & present_t).sum(dim=1)
+            ahead_n   = ((others[:, :, 1] > 0.0) & present).sum(dim=1)
+            passed    = (ahead_t - ahead_n).clamp(min=0).to(rewards.dtype)
+            rewards   = rewards + float(self.overtake_reward) * passed * (~crash).to(rewards.dtype)
         return next_states, rewards, means_all, vars_all, chosen_idx, done
 
     # ── Uncertainty measures ───────────────────────────────────────────────────

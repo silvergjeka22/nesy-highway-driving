@@ -132,10 +132,16 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
 
-        # The shield decides from the CURRENT (pre-action) state.
+        # The shield decides from the CURRENT (pre-action) state. Discrete actions
+        # go through the FSM shield; the continuous hybrid (lane_cmd, speed_cmd)
+        # action goes through its FSM + CBF-speed-cap variant.
         if apply_shield:
-            preds = predicates(scene_fn(env), cfg)
-            action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
+            if isinstance(action, np.ndarray) and action.shape == (2,):
+                from nesy.roadmap import hybrid_safety_shield
+                action, fsm_state = hybrid_safety_shield(action, scene_fn(env), fsm_state, cfg)
+            else:
+                preds = predicates(scene_fn(env), cfg)
+                action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
 
         obs, reward, terminated, truncated, info = env.step(action)
 
