@@ -238,10 +238,15 @@ offpolicy:
                                 # the policy that crashing in imagination is cheap (measured:
                                 # crash rate ROSE to 98% as the imagined share ramped up)
   macura:                       # the paper's own block
-    xi: 1.0                     # threshold scale ξ (the task-tuned knob; paper tunes 0.3-30 per
-                                # task). Tighter than 1.5: only rollouts the ensemble is genuinely
-                                # confident about enter the buffer — quality over quantity, since
-                                # the sorted-obs dynamics are the hard part here.
+    xi: 2.5                     # threshold scale ξ (paper tunes 0.3-30 per task). MUST be loose
+                                # here: the ensemble disagrees most exactly when a car crosses
+                                # from "ahead" to "behind" (the sorted rows swap identity) — i.e.
+                                # at the very moment an imagined PASS completes. A tight ξ
+                                # truncates rollouts right before every simulated overtake, so
+                                # the pass bonus is never paid and the policy stays shy
+                                # (measured: ξ 1.0 dropped eval passes 2.06 -> 0.55). Loose ξ
+                                # admits those noisy-but-crucial transitions; the 50% real
+                                # anchor keeps the noise from dominating.
     zeta: 95                    # ζ-percentile of first-step uncertainties
     unc_thresh_run_avg_history: 20   # rounds in κ's running average
     exploration: white          # DOCUMENTED DEVIATION from the paper's pink (β=1): on the hybrid
