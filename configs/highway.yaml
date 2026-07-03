@@ -197,7 +197,8 @@ offpolicy:
     freq_train_model: 200       # retrain ensemble + regenerate rollouts every N env steps
     effective_rollouts_per_step: 100   # rollout starts per round = this × freq
     retain_epochs: 1
-    g_max: 10                   # base updates/step; MACURA scales it via Eq. 22
+    g_max: 20                   # base updates/step; MACURA scales it via Eq. 22 (paper uses 10-30;
+                                # 20 gives the 3k fast run enough imagined gradient steps to matter)
     max_rollout_length: 5       # T_max
     obs_clip: 2.0               # imagined states clamp (normalised Kinematics is in [-1,1])
     reward_clip: 12.0           # imagined reward clamp (our real range ≈ [-9, +5])
@@ -208,14 +209,18 @@ offpolicy:
     xi: 1.5                     # threshold scale ξ (the task-tuned knob)
     zeta: 95                    # ζ-percentile of first-step uncertainties
     unc_thresh_run_avg_history: 20   # rounds in κ's running average
-    exploration: pink           # (paper) pink noise β=1 — temporally-correlated exploration
+    exploration: white          # DOCUMENTED DEVIATION from the paper's pink (β=1): on the hybrid
+                                # driving action, temporally-held pink excursions mean long slow
+                                # stretches / repeated lane commands — measured ~half SAC's
+                                # overtakes in the same 3k. White explores speed+lane per-step,
+                                # like the SAC baseline (fair comparison of the MODEL, not noise).
   curriculum:                   # real-data-first ramp (identical for all model-based agents)
     enabled: true
-    real_ratio_knots:
-      - {step: 0,    real_ratio: 1.00}
-      - {step: 1000, real_ratio: 1.00}
-      - {step: 2000, real_ratio: 0.30}
-      - {step: 3000, real_ratio: 0.10}
+    real_ratio_knots:           # imagination phases in EARLY — in a 3k run the model is usable
+      - {step: 0,    real_ratio: 1.00}    # by ~800 (it retrains every 200 steps on all real data)
+      - {step: 800,  real_ratio: 1.00}
+      - {step: 1500, real_ratio: 0.30}
+      - {step: 2500, real_ratio: 0.10}
     warmup_exploration: null
     warmup_exploration_until_step: 1000
 
