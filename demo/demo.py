@@ -4,7 +4,7 @@ Runs OUTSIDE any notebook kernel and renders offscreen, so pygame can never cras
 a kernel. Works for Part-1 (PPO/DQN) and Part-2 (NeSy, ``--shield``) checkpoints.
 
 Usage:
-    python demo/demo.py --model /content/drive/MyDrive/nesy-highway-driving/checkpoints/part1_best_ppo.zip
+    python demo/demo.py --model /content/drive/MyDrive/nesy-highway-driving/checkpoints/part1_best.zip
     python demo/demo.py --model .../part2_nesy.zip --shield --out drive/videos/part2_nesy.mp4
 
 The clip plays episodes back to back until it is at least ``--seconds`` long.

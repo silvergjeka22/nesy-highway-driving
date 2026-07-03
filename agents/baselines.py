@@ -67,6 +67,7 @@ class _ProgressPrinter(BaseCallback):
         self.total_steps = total_steps
         self.best_rew = -float("inf")
         self.saved_best = False
+        self.total_overtakes = 0      # running count of cars passed over the whole run
         self._first_done = False
         self._t0 = None
         self._start_step = 0
@@ -87,6 +88,13 @@ class _ProgressPrinter(BaseCallback):
         return f" | {sps:4.0f} steps/s"
 
     def _on_step(self):
+        # Accumulate the running overtake total as episodes finish (Monitor puts
+        # the info_keywords into info["episode"] at the last step of each episode).
+        for info in self.locals.get("infos", []):
+            ep = info.get("episode")
+            if ep is not None:
+                self.total_overtakes += int(ep.get("overtakes", 0))
+
         if not self._first_done and (self.model.ep_info_buffer or []):
             self._first_done = True
             e = list(self.model.ep_info_buffer)[-1]
@@ -104,7 +112,8 @@ class _ProgressPrinter(BaseCallback):
                     ot_mean = float(np.mean([e["overtakes"] for e in buf]))
                     ot100 = 100.0 * sum(e["overtakes"] for e in buf) / max(1, sum(e["l"] for e in buf))
                     crash = float(np.mean([e["crashed"] for e in buf]))
-                    ot = f" | overtakes/ep {ot_mean:4.2f} ({ot100:4.1f}/100 steps) | crash {crash:4.0%}"
+                    ot = (f" | overtakes {self.total_overtakes} total, {ot_mean:4.2f}/ep "
+                          f"({ot100:4.1f}/100 steps) | crash {crash:4.0%}")
                     self.model.logger.record("rollout/ep_overtakes_mean", ot_mean)
                     self.model.logger.record("rollout/ep_crash_rate", crash)
                 extra = f" | eps {self.model.exploration_rate:.3f}" if hasattr(self.model, "exploration_rate") else ""

@@ -88,7 +88,8 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
         config=env_cfg["config"],
     )
 
-    env = OvertakeCounter(env)
+    # "blocked" reuses the FSM's follow-gap: one notion of "stuck behind a leader".
+    env = OvertakeCounter(env, blocked_gap=cfg["fsm"]["follow_gap"])
 
     shaping = cfg.get("shaping", {})
     if shaping.get("enabled", False):
@@ -97,6 +98,7 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
             overtake_bonus=shaping.get("overtake_bonus", 0.0),
             offroad_penalty=shaping.get("offroad_penalty", 0.0),
             collision_penalty=shaping.get("collision_penalty", 0.0),
+            lane_change_bonus=shaping.get("lane_change_bonus", 0.0),
         )
 
     if logic_reward:
@@ -145,33 +147,67 @@ def read_scene(env):
 
 
 class OvertakeCounter(gym.Wrapper):
-    """Count distinct cars the ego passes, and flag off-road, via ``info``.
+    """Count cars the ego passes and lane changes it makes, via ``info``.
 
     Pure instrumentation — never alters reward or actions. A neighbour that was
-    ahead of the ego and is now behind it counts once (tracked by identity).
+    ahead of the ego and is now behind it counts once (tracked by identity);
+    ``info['lane_changed']`` flags the step where the ego crosses into a new lane
+    (highway-env's own ``lane_change_reward`` is dead config for highway-v0 —
+    its ``_rewards()`` never emits that component — so shaping needs this flag).
     """
 
-    def __init__(self, env):
+    def __init__(self, env, blocked_gap=25.0):
         super().__init__(env)
+        self.blocked_gap = float(blocked_gap)   # leader within this = "blocked" [m]
         self._ahead_ids = set()
         self._overtakes = 0
+        self._lane = None
+        self._blocked = False
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._overtakes = 0
         self._ahead_ids = self._currently_ahead()
+        self._lane = self._current_lane()
+        self._blocked = self._is_blocked()
         info = dict(info)
         info["overtakes"] = 0
+        info["escape_lane_change"] = False
         info["is_offroad"] = self._is_offroad()
         return obs, info
 
     def step(self, action):
+        was_blocked = self._blocked
         obs, reward, terminated, truncated, info = self.env.step(action)
         self._update_overtakes()
+        lane = self._current_lane()
         info = dict(info)
         info["overtakes"] = self._overtakes
+        # a PURPOSEFUL lane change: the ego was stuck behind a close leader and
+        # moved to another lane. (A flat any-lane-change flag is farmable — the
+        # policy learns to spam LANE_LEFT/RIGHT at the road edge instead of passing.)
+        info["escape_lane_change"] = bool(was_blocked and lane != self._lane)
+        self._lane = lane
+        self._blocked = self._is_blocked()
         info["is_offroad"] = self._is_offroad()
         return obs, reward, terminated, truncated, info
+
+    def _current_lane(self):
+        ego = self._ego()
+        idx = getattr(ego, "lane_index", None) if ego is not None else None
+        return idx[2] if idx else None
+
+    def _is_blocked(self):
+        """A slower-or-equal leader within BLOCKED_GAP in the ego's lane."""
+        ego = self._ego()
+        if ego is None:
+            return False
+        lane = self._current_lane()
+        for v in self._others():
+            vidx = getattr(v, "lane_index", None)
+            if vidx and vidx[2] == lane and 0 < (v.position[0] - ego.position[0]) < self.blocked_gap:
+                return True
+        return False
 
     def _ego(self):
         return self.env.unwrapped.vehicle
@@ -214,8 +250,13 @@ class OvertakeCounter(gym.Wrapper):
 class RewardShapingWrapper(gym.Wrapper):
     """Add a small, config-driven shaping term to the native reward (Part 1).
 
-    Three levers, all from ``cfg['shaping']``:
+    Four levers, all from ``cfg['shaping']``:
       * ``overtake_bonus``  — ``+bonus`` for each car the ego passes (drives aggression).
+      * ``lane_change_bonus`` — ``+bonus`` when a lane change ESCAPES a blocked lane
+        (slow leader close ahead). Without it the policy converges to FASTER/IDLE
+        and never discovers that passing needs lane changes (measured: 0 changes);
+        paid on any change it gets farmed at the road edge (also measured) — so it
+        pays only for the escape, the first link of the overtaking chain.
       * ``offroad_penalty`` — ``-pen`` per step off the road.
       * ``collision_penalty`` — one-off ``-pen`` on a crash. highway-env's
         ``normalize_reward`` squashes its native ``collision_reward`` to ~0 per step,
@@ -224,11 +265,13 @@ class RewardShapingWrapper(gym.Wrapper):
         to overtake hard **without** crashing.
     """
 
-    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0):
+    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0,
+                 lane_change_bonus=0.0):
         super().__init__(env)
         self.overtake_bonus = float(overtake_bonus)
         self.offroad_penalty = float(offroad_penalty)
         self.collision_penalty = float(collision_penalty)
+        self.lane_change_bonus = float(lane_change_bonus)
         self._prev_overtakes = 0
 
     def reset(self, **kwargs):
@@ -243,6 +286,8 @@ class RewardShapingWrapper(gym.Wrapper):
         self._prev_overtakes = overtakes
 
         shaped = reward + self.overtake_bonus * passed
+        if info.get("escape_lane_change", False):
+            shaped += self.lane_change_bonus
         if info.get("is_offroad", False):
             shaped -= self.offroad_penalty
         if info.get("crashed", False):

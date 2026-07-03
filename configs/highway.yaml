@@ -76,8 +76,16 @@ env:
 # AGGRESSIVE (many lane changes/passes) — Part 2 then shows the NeSy layer taming it.
 shaping:
   enabled: true
-  overtake_bonus: 2.5       # each car passed. ~5 steps of max-speed reward per pass, so passing
-                            # beats sitting behind traffic by a wide margin.
+  overtake_bonus: 3.0       # each car passed. ~6 steps of max-speed reward per pass: an 80-step
+                            # episode that passes 4 cars earns ~48 vs ~13 for sitting behind a
+                            # slow leader — staying behind is clearly the worst legal strategy.
+  lane_change_bonus: 0.5    # paid ONLY when a lane change escapes a blocked lane (slow leader
+                            # within 25 m) — the first link of the overtaking chain. Without any
+                            # bonus the policy never changes lanes (measured: 0 changes); a flat
+                            # any-change bonus gets farmed by spamming LANE_LEFT/RIGHT at the
+                            # road edge (also measured). The escape version can't be farmed: to
+                            # earn it again you must slot behind another slow car and pass it.
+                            # (highway-env's own lane_change_reward is dead config for highway-v0.)
   offroad_penalty: 0.5      # leaving the road is clearly bad.
   collision_penalty: 8.0    # one-off crash penalty (applied on top of the native -1). With
                             # normalize_reward:false a crash must outweigh the speed earned
@@ -94,10 +102,13 @@ ppo:
   n_steps: 512               # rollout length before each update (standard for a real run)
   batch_size: 256
   n_epochs: 10
-  gamma: 0.95
+  gamma: 0.98                # 35-step (~18 s) horizon at 2 Hz: long enough to value "after this
+                             # pass comes open road and more passes" and to fear the crash that
+                             # ends all future reward. 0.95 (10 s) was too short for either.
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.02             # a little exploration to keep discovering overtakes over the longer run
+  ent_coef: 0.05             # exploration pressure: below this the policy settles on FASTER/IDLE
+                             # and never tries the lane changes that overtaking requires (measured).
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
@@ -111,7 +122,7 @@ dqn:
   buffer_size: 50000
   learning_starts: 1000           # fill the buffer with diverse (incl. safe) transitions before learning
   batch_size: 128                 # steadier gradient estimates
-  gamma: 0.95
+  gamma: 0.98                     # same horizon as PPO (see above) — fair comparison
   train_freq: 4
   gradient_steps: 1
   target_update_interval: 1000    # a stable target network over a 20k-step run
