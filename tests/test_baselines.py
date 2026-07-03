@@ -88,8 +88,81 @@ def _assert_artifacts(cfg, tag):
     assert os.path.exists(os.path.join(root, "checkpoints", f"{tag}.zip"))
     csv = os.path.join(root, "metrics", "curves", tag, "progress.csv")
     with open(csv) as f:
-        header = f.readline()
-    assert "ep_rew_mean" in header
+        content = f.read()
+    assert "ep_rew_mean" in content
+    assert "ep_lane_changes_mean" in content    # exploration visibility logged
+
+
+def test_exploration_wired():
+    """The exploration knobs actually land in the models (fair by construction)."""
+    from envs.highway_factory import create_environment
+    from agents.baselines import build_rppo, build_dqn, build_qrdqn
+
+    cfg = micro_cfg()
+    env = create_environment(cfg)
+    rppo = build_rppo(cfg, env)
+    dqn = build_dqn(cfg, env)
+    qrdqn = build_qrdqn(cfg, env)
+    env.close()
+    assert rppo.ent_coef == cfg["rppo"]["ent_coef"] > 0          # entropy pressure ON
+    assert rppo.policy.lstm_actor.hidden_size == cfg["rppo"]["policy_kwargs"]["lstm_hidden_size"]
+    for m, key in ((dqn, "dqn"), (qrdqn, "qrdqn")):              # identical ε schedules
+        assert m.exploration_fraction == cfg[key]["exploration_fraction"]
+        assert m.exploration_final_eps == cfg[key]["exploration_final_eps"]
+    assert qrdqn.policy.n_quantiles == cfg["qrdqn"]["policy_kwargs"]["n_quantiles"]
+
+
+def test_action_mix_string():
+    """The per-window action histogram prints and resets."""
+    from agents.baselines import _ProgressPrinter
+
+    p = _ProgressPrinter("T")
+    p._action_counts = np.array([1, 1, 0, 7, 1])
+    s = p._action_mix()
+    assert s.startswith(" | act L10") and "F70" in s and s.endswith("%")
+    assert p._action_counts.sum() == 0                           # window reset
+    assert p._action_mix() == ""                                 # empty window -> no noise
+
+
+def test_lane_change_counter_cumulative():
+    """info['lane_changes'] accumulates the per-step lane_changed flags."""
+    from envs.highway_factory import create_environment
+
+    cfg = micro_cfg()
+    env = create_environment(cfg)
+    obs, info = env.reset(seed=0)
+    assert info["lane_changes"] == 0
+    flags = 0
+    for i in range(20):
+        obs, r, terminated, truncated, info = env.step(2 if i < 10 else 0)
+        flags += int(info["lane_changed"])
+        assert info["lane_changes"] == flags
+        if terminated or truncated:
+            obs, info = env.reset()
+            flags = 0
+    env.close()
+
+
+def test_crash_sprint_penalized():
+    """FASTER-until-impact must end on a heavily negative step: the crash penalty
+    lands and (with high_speed_reward 0.5) erases the sprint that caused it."""
+    from envs.highway_factory import create_environment
+
+    cfg = micro_cfg()
+    pen = cfg["shaping"]["collision_penalty"]
+    env = create_environment(cfg)
+    obs, _ = env.reset(seed=0)
+    crashed = False
+    for _ in range(200):
+        obs, r, terminated, truncated, info = env.step(3)        # FASTER
+        if terminated and info["crashed"]:
+            crashed = True
+            assert r <= -(pen - 2)                               # penalty applied on the crash step
+            break
+        if terminated or truncated:
+            obs, _ = env.reset()
+    env.close()
+    assert crashed                                               # the sprint does crash
 
 
 def test_recurrent_predictor():

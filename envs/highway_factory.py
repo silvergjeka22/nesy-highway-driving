@@ -163,18 +163,21 @@ class OvertakeCounter(gym.Wrapper):
         self.blocked_gap = float(blocked_gap)   # leader within this = "blocked" [m]
         self._ahead_ids = set()
         self._overtakes = 0
+        self._lane_changes = 0
         self._lane = None
         self._blocked = False
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._overtakes = 0
+        self._lane_changes = 0
         self._ahead_ids = self._currently_ahead()
         self._lane = self._current_lane()
         self._blocked = self._is_blocked()
         info = dict(info)
         info["overtakes"] = 0
         info["lane_changed"] = False
+        info["lane_changes"] = 0
         info["escape_lane_change"] = False
         info["is_offroad"] = self._is_offroad()
         return obs, info
@@ -188,6 +191,8 @@ class OvertakeCounter(gym.Wrapper):
         info["overtakes"] = self._overtakes
         info["lane_changed"] = bool(lane is not None and self._lane is not None
                                     and lane != self._lane)
+        self._lane_changes += int(info["lane_changed"])
+        info["lane_changes"] = self._lane_changes     # cumulative this episode (Monitor logs it)
         # a PURPOSEFUL lane change: the ego was stuck behind a close leader and
         # moved to another lane. (A flat any-lane-change flag is farmable — the
         # policy learns to spam LANE_LEFT/RIGHT at the road edge instead of passing.)

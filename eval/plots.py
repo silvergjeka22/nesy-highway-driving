@@ -22,8 +22,8 @@ def load_curve(cfg, tag):
     """Load one model's training curve from SB3's ``progress.csv``.
 
     Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean),
-    ``len`` (ep_len_mean), ``overtakes`` and ``crash`` (recorded by the training
-    progress callback), or ``None`` if the log is missing.
+    ``len`` (ep_len_mean), ``overtakes``, ``lane_changes`` and ``crash`` (recorded
+    by the training progress callback), or ``None`` if the log is missing.
     """
     csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
@@ -31,6 +31,7 @@ def load_curve(cfg, tag):
     df = pd.read_csv(csv)
     cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean",
             "len": "rollout/ep_len_mean", "overtakes": "rollout/ep_overtakes_mean",
+            "lane_changes": "rollout/ep_lane_changes_mean",
             "crash": "rollout/ep_crash_rate"}
     out = pd.DataFrame()
     for k, c in cols.items():
@@ -39,15 +40,17 @@ def load_curve(cfg, tag):
 
 
 def plot_training_curves(cfg, tags=("rppo", "dqn", "qrdqn"), save=True):
-    """Reward, episode length, overtakes/episode and crash rate vs timesteps.
+    """Reward, episode length, overtakes, lane changes and crash rate vs timesteps.
 
-    The overtakes panel is the one that shows the agent *learning to pass
-    traffic*; the crash panel shows what that aggression costs. Returns the
-    figure; saves ``metrics/training_curves.png`` to Drive.
+    The overtakes panel shows the agent *learning to pass traffic*, the
+    lane-changes panel whether it actually uses the manoeuvre actions, and the
+    crash panel what the aggression costs. Returns the figure; saves
+    ``metrics/training_curves.png`` to Drive.
     """
     panels = [("rew", "mean episode reward"), ("len", "mean episode length"),
-              ("overtakes", "overtakes per episode"), ("crash", "crash rate")]
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+              ("overtakes", "overtakes per episode"),
+              ("lane_changes", "lane changes per episode"), ("crash", "crash rate")]
+    fig, axes = plt.subplots(2, 3, figsize=(16, 7))
     for tag in tags:
         df = load_curve(cfg, tag)
         if df is None or df.empty:
@@ -58,6 +61,8 @@ def plot_training_curves(cfg, tags=("rppo", "dqn", "qrdqn"), save=True):
         ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
         ax.grid(alpha=0.3)
         ax.legend()
+    for ax in axes.flat[len(panels):]:
+        ax.axis("off")
     fig.tight_layout()
     if save:
         fig.savefig(drive_path(cfg, "metrics", "training_curves.png"), dpi=120, bbox_inches="tight")

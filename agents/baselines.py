@@ -31,7 +31,7 @@ def _monitored_env(cfg, logic_reward=False):
     overtake count and crash flag — that is what lets the progress prints and
     the training curves show cars-passed-over-time, not just reward."""
     env = create_environment(cfg, seed=cfg["seed"], logic_reward=logic_reward)
-    return Monitor(env, info_keywords=("overtakes", "crashed"))
+    return Monitor(env, info_keywords=("overtakes", "crashed", "lane_changes"))
 
 
 def resolve_device(cfg):
@@ -51,16 +51,20 @@ def resolve_device(cfg):
     return "cuda" if has_cuda else "cpu"
 
 
+_ACTION_LETTERS = ("L", "I", "R", "F", "S")   # LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER
+
+
 class _ProgressPrinter(BaseCallback):
     """Print a training line every ``print_freq`` steps and save the best model.
 
     Shows the running mean episode reward + length, plus — when the env's Monitor
     records them — the overtaking progress (cars passed per episode and per 100
-    steps) and the crash rate, so it is obvious whether the agent is learning to
-    pass traffic or just to survive. Whenever the mean reward improves it
-    checkpoints the model to ``best_path`` — so the saved checkpoint is the best
-    (highest reward) policy seen, not just the final one. The same numbers are
-    logged to ``progress.csv`` for the training-curve plots.
+    steps), the lane changes per episode and the crash rate, and the **action mix**
+    over the last print window (L/I/R/F/S %), so it is obvious whether the agent is
+    exploring all five manoeuvres or collapsing onto one. Whenever the mean reward
+    improves it checkpoints the model to ``best_path`` — so the saved checkpoint is
+    the best (highest reward) policy seen, not just the final one. The same numbers
+    are logged to ``progress.csv`` for the training-curve plots.
     """
 
     def __init__(self, tag, print_freq=200, best_path=None, total_steps=None):
@@ -72,6 +76,7 @@ class _ProgressPrinter(BaseCallback):
         self.best_rew = -float("inf")
         self.saved_best = False
         self.total_overtakes = 0      # running count of cars passed over the whole run
+        self._action_counts = None    # per-window action histogram (sized at start)
         self._first_done = False
         self._t0 = None
         self._start_step = 0
@@ -81,6 +86,20 @@ class _ProgressPrinter(BaseCallback):
         self._t0 = time.time()
         self._start_step = self.num_timesteps
         self._next = self.num_timesteps + self.print_freq
+        n = getattr(self.training_env.action_space, "n", 0)
+        self._action_counts = np.zeros(int(n), dtype=np.int64) if n else None
+
+    def _action_mix(self):
+        """Compact 'act L12/I8/R11/F58/S11%' string for the current window, then reset."""
+        if self._action_counts is None or self._action_counts.sum() == 0:
+            return ""
+        total = self._action_counts.sum()
+        labels = _ACTION_LETTERS if len(self._action_counts) == len(_ACTION_LETTERS) \
+            else [str(i) for i in range(len(self._action_counts))]
+        mix = "/".join(f"{l}{100 * c / total:.0f}"
+                       for l, c in zip(labels, self._action_counts))
+        self._action_counts[:] = 0
+        return f" | act {mix}%"
 
     def _speed(self):
         elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
@@ -92,6 +111,14 @@ class _ProgressPrinter(BaseCallback):
         return f" | {sps:4.0f} steps/s"
 
     def _on_step(self):
+        # Histogram the actions taken this step (exploration visibility).
+        if self._action_counts is not None:
+            acts = self.locals.get("actions")
+            if acts is not None:
+                for a in np.asarray(acts).ravel().astype(int):
+                    if 0 <= a < len(self._action_counts):
+                        self._action_counts[a] += 1
+
         # Accumulate the running overtake total as episodes finish (Monitor puts
         # the info_keywords into info["episode"] at the last step of each episode).
         for info in self.locals.get("infos", []):
@@ -115,11 +142,22 @@ class _ProgressPrinter(BaseCallback):
                 if "overtakes" in buf[-1]:   # Monitor(info_keywords) provides these
                     ot_mean = float(np.mean([e["overtakes"] for e in buf]))
                     ot100 = 100.0 * sum(e["overtakes"] for e in buf) / max(1, sum(e["l"] for e in buf))
+                    lc_mean = float(np.mean([e.get("lane_changes", 0) for e in buf]))
                     crash = float(np.mean([e["crashed"] for e in buf]))
                     ot = (f" | overtakes {self.total_overtakes} total, {ot_mean:4.2f}/ep "
-                          f"({ot100:4.1f}/100 steps) | crash {crash:4.0%}")
+                          f"({ot100:4.1f}/100 steps) | lane_ch {lc_mean:4.2f}/ep "
+                          f"| crash {crash:4.0%}")
+                    # Write one COMPLETE curve row per print, for every algorithm —
+                    # SB3's own dump cadence differs per algo (per rollout for PPO,
+                    # every N episodes for DQN) and can miss the recorded values.
+                    self.model.logger.record("rollout/ep_rew_mean", r)
+                    self.model.logger.record("rollout/ep_len_mean", ln)
                     self.model.logger.record("rollout/ep_overtakes_mean", ot_mean)
+                    self.model.logger.record("rollout/ep_lane_changes_mean", lc_mean)
                     self.model.logger.record("rollout/ep_crash_rate", crash)
+                    self.model.logger.record("time/total_timesteps", self.num_timesteps)
+                    self.model.logger.dump(self.num_timesteps)
+                ot += self._action_mix()
                 extra = f" | eps {self.model.exploration_rate:.3f}" if hasattr(self.model, "exploration_rate") else ""
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
