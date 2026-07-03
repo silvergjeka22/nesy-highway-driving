@@ -43,9 +43,9 @@ env:
     action:
       type: DiscreteMetaAction
     lanes_count: 4
-    vehicles_count: 25        # quick-run: fewer NPCs = faster stepping. Raise to ~50 (denser,
-                              # harder traffic — much more to pass) for the FULL run, together
-                              # with train.total_timesteps 30k.
+    vehicles_count: 50        # DENSE traffic — much more to pass, harder gaps to judge (the
+                              # full-run setting, paired with train.total_timesteps 30k).
+                              # Drop to ~25 for quick sanity runs: fewer NPCs = faster stepping.
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
@@ -112,7 +112,7 @@ shaping:
 # The ONE training-budget switch — all three algorithms read it, so changing this
 # single number keeps the comparison fair by construction.
 train:
-  total_timesteps: 3000      # fast sanity budget. Raise to 30000 for the REAL run
+  total_timesteps: 30000     # FULL run. Drop to 3000 for a fast sanity check
                              # (below ~20k the value-based learners collapse to a
                              # trivial always-accelerate policy and the comparison
                              # is meaningless).

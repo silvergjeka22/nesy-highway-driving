@@ -66,21 +66,44 @@ def load_policy_weights(weights_path, algo, cfg):
     return model
 
 
+class _FrameHook:
+    """Collect the intermediate simulation frames highway-env renders during a
+    step. The env only *decides* at ``policy_frequency`` (2 Hz), but simulates at
+    ``simulation_frequency`` (10 Hz): capturing one frame per decision plays back
+    5× too fast and jerky. highway-env's ``_automatic_rendering`` calls
+    ``_record_video_wrapper._capture_frame()`` at every physics substep — this
+    shim implements that interface and appends each substep frame to the current
+    episode's list."""
+
+    def __init__(self, env):
+        self.env = env
+        self.frames = None            # rebound to each episode's frame list
+
+    def _capture_frame(self):
+        frame = self.env.render()
+        if frame is not None and self.frames is not None:
+            self.frames.append(np.asarray(frame))
+
+
 def record(model, cfg, out_path, apply_shield=False, min_seconds=30, no_crash=False):
     """Play episodes until the clip is >= ``min_seconds`` and save an MP4.
 
-    Prints one line per episode (overtakes, steps, crash) so the demo visibly
-    proves the policy passes traffic. ``no_crash=True`` keeps only crash-free
-    episodes (resamples fresh seeds and discards any run that crashes), so the
-    saved clip shows clean driving only. Returns
-    ``(path, total_overtakes, total_steps)``.
+    Frames are captured at the SIMULATION frequency (every physics substep, via
+    :class:`_FrameHook`), not just at the 2 Hz decision points, and encoded at
+    that same rate — so the clip is smooth and plays in real time. Prints one
+    line per episode (overtakes, steps, crash) so the demo visibly proves the
+    policy passes traffic. ``no_crash=True`` keeps only crash-free episodes
+    (resamples fresh seeds and discards any run that crashes), so the saved clip
+    shows clean driving only. Returns ``(path, total_overtakes, total_steps)``.
     """
-    fps = cfg["eval"].get("video_fps", 10)
+    fps = int(cfg["env"]["config"].get("simulation_frequency", 15))   # real-time playback
     target_frames = int(min_seconds * fps)
     max_episodes = int(cfg["eval"].get("video_max_episodes", 60))
     seed0 = int(cfg["eval_seeds"][0])
 
     env = create_environment(cfg, render=True)
+    hook = _FrameHook(env)
+    env.unwrapped._record_video_wrapper = hook
     frames = []
     total_overtakes = total_steps = 0
     try:
@@ -93,14 +116,15 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30, no_crash=Fa
             done = False
             steps = 0
             ep_frames = []
+            hook.frames = ep_frames
+            hook._capture_frame()     # first render creates the viewer and turns
+                                      # on auto-rendering of the substeps
             while not done:
                 action, _ = model.predict(obs, deterministic=cfg["eval"]["deterministic"])
                 if apply_shield:
                     action, fsm_state = safety_shield(action, predicates(read_scene(env), cfg), fsm_state, cfg)
                 obs, _, terminated, truncated, info = env.step(action)
-                frame = env.render()
-                if frame is not None:
-                    ep_frames.append(np.asarray(frame))
+                hook._capture_frame()             # the step's final substep frame
                 steps += 1
                 done = terminated or truncated
             crashed = bool(info.get("crashed"))
@@ -113,12 +137,15 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30, no_crash=Fa
             frames.extend(ep_frames)
             total_overtakes += ot
             total_steps += steps
-            print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps"
+            print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps "
+                  f"({len(ep_frames) / fps:.1f}s of video)"
                   f"{'  (crashed)' if crashed else ''}", flush=True)
             ep += 1
     finally:
+        env.unwrapped._record_video_wrapper = None
         env.close()
 
+    print(f"[demo] clip: {len(frames)} frames @ {fps} fps = {len(frames) / fps:.1f}s", flush=True)
     return save_mp4(frames, out_path, fps=fps), total_overtakes, total_steps
 
 
