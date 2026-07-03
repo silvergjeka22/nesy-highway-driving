@@ -223,10 +223,15 @@ offpolicy:
     features_per_vehicle: 5
     crash_x_distance: 0.03      # |Δx| < ~6 m (car length + margin), normalised
     crash_y_distance: 0.13      # |Δy| < ~2 m (same lane), normalised
-    overtake_reward: 3.0        # imagined passes are priced at the KNOWN overtake bonus —
-                                # the Gaussian reward blurs the rare +3 spike exactly like the
-                                # crash spike, so in imagination overtaking paid NOTHING and
-                                # MACURA rationally learned to stay behind traffic (measured)
+    overtake_reward: 6.0        # imagined passes pay 2× the real bonus — UPSIDE OPTIMISM, the
+                                # risk-appetite dial for the model-based agent only. At the true
+                                # +3 MACURA's exact risk pricing refuses marginal passes and
+                                # stays behind traffic (measured: 2.06 passes/ep at 4% crash —
+                                # too timid). The crash cost stays TRUE (-9) so it still learns
+                                # WHICH gaps are safe: attempt more, select carefully. Raise for
+                                # more aggression, lower toward 3.0 for max safety. SAC untouched.
+                                # (Without any pricing the Gaussian reward blurs the rare +3
+                                # spike away entirely and MACURA never passes at all — measured.)
     crash_reward: -9.0          # imagined crashes are priced at the KNOWN collision cost
                                 # (native -1 + shaping.collision_penalty 8): the learned
                                 # Gaussian reward blurs this rare spike away, which taught

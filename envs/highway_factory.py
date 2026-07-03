@@ -115,7 +115,7 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
 make_env = create_environment
 
 
-def create_hybrid_environment(cfg, seed=None):
+def create_hybrid_environment(cfg, seed=None, render=False):
     """The Part-1 env exposed with a continuous hybrid action, for SAC / MACURA.
 
     Wraps the standard stack (same reward shaping, overtake counting, monitors)
@@ -123,7 +123,7 @@ def create_hybrid_environment(cfg, seed=None):
     flattened ``(25,)`` observation — the interface the continuous off-policy
     agents (and the MACURA paper's machinery) expect.
     """
-    return HybridAction(create_environment(cfg, seed=seed), cfg)
+    return HybridAction(create_environment(cfg, render=render, seed=seed), cfg)
 
 
 class HybridAction(gym.Wrapper):

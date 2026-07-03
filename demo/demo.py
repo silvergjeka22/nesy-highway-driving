@@ -37,9 +37,9 @@ sys.path.insert(0, _REPO)
 import numpy as np  # noqa: E402
 
 from utils import load_config, save_mp4  # noqa: E402
-from envs.highway_factory import create_environment, read_scene  # noqa: E402
+from envs.highway_factory import create_environment, create_hybrid_environment, read_scene  # noqa: E402
 from agents.baselines import load_model, build_ppo, build_dqn  # noqa: E402
-from nesy.roadmap import predicates, safety_shield  # noqa: E402
+from nesy.roadmap import predicates, safety_shield, hybrid_safety_shield  # noqa: E402
 
 
 def load_policy_weights(weights_path, algo, cfg):
@@ -64,18 +64,20 @@ def load_policy_weights(weights_path, algo, cfg):
     return model
 
 
-def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
+def record(model, cfg, out_path, apply_shield=False, min_seconds=30, hybrid=False):
     """Play episodes until the clip is >= ``min_seconds`` and save an MP4.
 
     Prints one line per episode (overtakes, steps, crash) so the demo visibly
-    proves the policy passes traffic. Returns ``(path, total_overtakes, total_steps)``.
+    proves the policy passes traffic. ``hybrid=True`` uses the continuous
+    (lane_cmd, speed_cmd) env for the SAC/MACURA agents. Returns
+    ``(path, total_overtakes, total_steps)``.
     """
     fps = cfg["eval"].get("video_fps", 10)
     target_frames = int(min_seconds * fps)
     max_episodes = int(cfg["eval"].get("video_max_episodes", 60))
     seed0 = int(cfg["eval_seeds"][0])
 
-    env = create_environment(cfg, render=True)
+    env = create_hybrid_environment(cfg, render=True) if hybrid else create_environment(cfg, render=True)
     frames = []
     total_overtakes = total_steps = 0
     try:
@@ -88,7 +90,10 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
             while not done:
                 action, _ = model.predict(obs, deterministic=cfg["eval"]["deterministic"])
                 if apply_shield:
-                    action, fsm_state = safety_shield(action, predicates(read_scene(env), cfg), fsm_state, cfg)
+                    if hybrid:
+                        action, fsm_state = hybrid_safety_shield(action, read_scene(env), fsm_state, cfg)
+                    else:
+                        action, fsm_state = safety_shield(action, predicates(read_scene(env), cfg), fsm_state, cfg)
                 obs, _, terminated, truncated, info = env.step(action)
                 frame = env.render()
                 if frame is not None:
@@ -109,8 +114,10 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30):
 
 def main():
     ap = argparse.ArgumentParser(description="Record a driving video from a saved model.")
-    ap.add_argument("--model", required=True, help="path to the .zip checkpoint (from Drive)")
-    ap.add_argument("--algo", default="ppo", choices=["ppo", "dqn"], help="algorithm (default: ppo)")
+    ap.add_argument("--model", required=True,
+                    help="checkpoint: .zip (ppo/dqn) or *_policy.pt (sac/macura)")
+    ap.add_argument("--algo", default="ppo", choices=["ppo", "dqn", "sac", "macura"],
+                    help="algorithm (default: ppo)")
     ap.add_argument("--shield", action="store_true", help="apply the NeSy safety shield (Part 2)")
     ap.add_argument("--out", default=None, help="output .mp4 path (default: alongside the model)")
     ap.add_argument("--config", default="configs/highway.yaml", help="config YAML")
@@ -123,13 +130,22 @@ def main():
     out_path = args.out or (os.path.splitext(args.model)[0] + ("_shield.mp4" if args.shield else ".mp4"))
 
     print(f"loading {args.algo} model: {args.model}")
-    if args.model.endswith((".pt", ".pth")):
+    hybrid = args.algo in ("sac", "macura")
+    if hybrid:
+        # continuous off-policy agents: build from config, load the torch checkpoint
+        from agents.offpolicy.trainers import build_offpolicy, as_predictor
+        agent = build_offpolicy(cfg, args.algo, device="cpu")
+        prefix = args.model[:-len("_policy.pt")] if args.model.endswith("_policy.pt") else args.model
+        agent.load(prefix)
+        model = as_predictor(agent)
+    elif args.model.endswith((".pt", ".pth")):
         # weights-only path (torch state_dict) — cross-version safe
         model = load_policy_weights(args.model, args.algo, cfg)
     else:
         model = load_model(args.model, args.algo)
     print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
-    path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield, min_seconds=min_seconds)
+    path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield,
+                                    min_seconds=min_seconds, hybrid=hybrid)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
