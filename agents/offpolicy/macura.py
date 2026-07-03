@@ -34,6 +34,17 @@ class MACURA(ModelBasedAgent):
         self._border_history = []          # last `history` per-round border values
         self._border_max     = history
         self.kappa           = 0.0         # current adaptive threshold (logged)
+        # Dual stopping (NeSy novelty): rollouts ALSO stop where a temporal-logic
+        # rule fires — never learn from imagined futures that break the law.
+        # Rule params + obs layout are injected by the trainer (config["rules"] /
+        # config["env_layout"]).
+        self.tl_stopping = bool(cfg.get("tl_stopping", False))
+        self._rules      = config.get("rules")
+        layout           = config.get("env_layout", {})
+        self._lanes      = int(layout.get("lanes_count", 4))
+        self._feat_per_v = int(layout.get("features_per_vehicle", 5))
+        if self.tl_stopping and self._rules is None:
+            raise ValueError("tl_stopping needs config['rules'] (injected by the trainer)")
 
     # Paper Eq. 22 — gradient steps scale with model-buffer filling
     def _num_updates(self) -> int:
@@ -49,6 +60,7 @@ class MACURA(ModelBasedAgent):
 
         stored    = 0
         terminals = 0
+        tl_cut    = 0
         threshold = self.kappa
 
         for depth in range(self.max_rollout_length):
@@ -69,6 +81,15 @@ class MACURA(ModelBasedAgent):
                 self.kappa = threshold
 
             certain = u < threshold                                   # (B,) bool
+            if self.tl_stopping:
+                # dual stopping: drop imagined transitions that land in a rule
+                # violation (RG1 unsafe gap / RG3 over limit) — same gating as
+                # the uncertainty cut, entirely separate from GJS/κ.
+                from agents.offpolicy.dual_stopping import tl_violation_mask
+                illegal = tl_violation_mask(next_states, self._rules,
+                                            self._lanes, self._feat_per_v)
+                tl_cut += int((certain & illegal).sum().item())
+                certain = certain & ~illegal
             if not bool(certain.any()):
                 break
 
@@ -96,9 +117,12 @@ class MACURA(ModelBasedAgent):
             if states.shape[0] == 0:
                 break
 
-        return {
+        out = {
             "rollout_depth_mean": stored / n_start,
             "kappa":              self.kappa,
             "model_transitions":  stored,
             "model_term_frac":    terminals / max(1, stored),
         }
+        if self.tl_stopping:
+            out["tl_cut_frac"] = tl_cut / max(1, stored + tl_cut)
+        return out

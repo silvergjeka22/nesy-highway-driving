@@ -24,6 +24,12 @@ _ALGOS = {"sac": SAC, "macura": MACURA}
 def build_offpolicy(cfg, algo, device=None):
     """Construct a SAC or MACURA agent for the hybrid highway env (no training)."""
     op = cfg["offpolicy"]
+    # dual stopping needs the traffic-rule parameters + observation layout
+    op["rules"] = cfg["rules"]
+    op["env_layout"] = {
+        "lanes_count": cfg["env"]["config"]["lanes_count"],
+        "features_per_vehicle": op["model_based"].get("features_per_vehicle", 5),
+    }
     env = create_hybrid_environment(cfg)
     state_dim = int(np.prod(env.observation_space.shape))
     action_dim = int(np.prod(env.action_space.shape))
@@ -98,6 +104,8 @@ def train_offpolicy(cfg, algo, path=None):
                 extra = (f" | κ {metrics['kappa']:.3f} | imag {metrics.get('imagined_pct', 0):.0f}%"
                          f" | depth {metrics.get('rollout_depth_mean', 0):.1f}"
                          f" | term {metrics.get('model_term_frac', 0):.1%}")
+                if "tl_cut_frac" in metrics:
+                    extra += f" | TLcut {metrics['tl_cut_frac']:.1%}"
             flag = ""
             if r > best_rew and step > warmup:
                 best_rew = r

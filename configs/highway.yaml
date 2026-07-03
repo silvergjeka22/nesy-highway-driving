@@ -162,7 +162,7 @@ offpolicy:
     epoch_length: 500           # "epoch" for model-data lifetime bookkeeping
     max_episode_steps: 80       # env horizon (duration 40 s × 2 Hz) — pink-noise sequence length
     batch_size: 256             # (paper)
-    buffer_size: 30000          # real-env buffer (>= total_steps)
+    buffer_size: 50000          # real-env buffer (>= total_steps; sized for 20-30k runs)
     gamma: 0.98                 # same horizon as PPO/DQN — fair cross-comparison
     tau: 0.005                  # (paper)
     learning_rate: 3.0e-4       # (paper) actor, critics, alpha
@@ -249,6 +249,12 @@ offpolicy:
                                 # anchor keeps the noise from dominating.
     zeta: 95                    # ζ-percentile of first-step uncertainties
     unc_thresh_run_avg_history: 20   # rounds in κ's running average
+    tl_stopping: false          # dual stopping (the NeSy novelty, notebook 1 trains a 2nd MACURA
+                                # with this on): imagined rollouts also stop when a temporal-logic
+                                # rule fires (RG1 unsafe gap / RG3 over limit) — "do not learn
+                                # from imagined futures that break the law". Composable with the
+                                # shield: SAC must be vetoed at run time; MACURA can be taught
+                                # to not even PLAN illegal futures.
     exploration: white          # DOCUMENTED DEVIATION from the paper's pink (β=1): on the hybrid
                                 # driving action, temporally-held pink excursions mean long slow
                                 # stretches / repeated lane commands — measured ~half SAC's

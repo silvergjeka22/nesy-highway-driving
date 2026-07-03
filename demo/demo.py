@@ -64,12 +64,15 @@ def load_policy_weights(weights_path, algo, cfg):
     return model
 
 
-def record(model, cfg, out_path, apply_shield=False, min_seconds=30, hybrid=False):
+def record(model, cfg, out_path, apply_shield=False, min_seconds=30, hybrid=False,
+           no_crash=False):
     """Play episodes until the clip is >= ``min_seconds`` and save an MP4.
 
     Prints one line per episode (overtakes, steps, crash) so the demo visibly
     proves the policy passes traffic. ``hybrid=True`` uses the continuous
-    (lane_cmd, speed_cmd) env for the SAC/MACURA agents. Returns
+    (lane_cmd, speed_cmd) env for the SAC/MACURA agents. ``no_crash=True`` keeps
+    only crash-free episodes (resamples fresh seeds and discards any run that
+    crashes), so the saved clip shows clean driving only. Returns
     ``(path, total_overtakes, total_steps)``.
     """
     fps = cfg["eval"].get("video_fps", 10)
@@ -87,6 +90,7 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30, hybrid=Fals
             fsm_state = cfg["fsm"]["initial_state"]
             done = False
             steps = 0
+            ep_frames = []
             while not done:
                 action, _ = model.predict(obs, deterministic=cfg["eval"]["deterministic"])
                 if apply_shield:
@@ -97,14 +101,21 @@ def record(model, cfg, out_path, apply_shield=False, min_seconds=30, hybrid=Fals
                 obs, _, terminated, truncated, info = env.step(action)
                 frame = env.render()
                 if frame is not None:
-                    frames.append(np.asarray(frame))
+                    ep_frames.append(np.asarray(frame))
                 steps += 1
                 done = terminated or truncated
+            crashed = bool(info.get("crashed"))
             ot = int(info.get("overtakes", 0))
+            if no_crash and crashed:
+                print(f"[demo] episode {ep + 1}: crashed after {steps} steps — discarded (--no-crash)",
+                      flush=True)
+                ep += 1
+                continue
+            frames.extend(ep_frames)
             total_overtakes += ot
             total_steps += steps
             print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps"
-                  f"{'  (crashed)' if info.get('crashed') else ''}", flush=True)
+                  f"{'  (crashed)' if crashed else ''}", flush=True)
             ep += 1
     finally:
         env.close()
@@ -122,10 +133,16 @@ def main():
     ap.add_argument("--out", default=None, help="output .mp4 path (default: alongside the model)")
     ap.add_argument("--config", default="configs/highway.yaml", help="config YAML")
     ap.add_argument("--seconds", type=float, default=None, help="min video length (default: config eval.video_seconds)")
+    ap.add_argument("--duration", type=int, default=None,
+                    help="episode length in sim-seconds; pass a huge value (e.g. 100000) for effectively infinite episodes that end only on a crash")
+    ap.add_argument("--no-crash", dest="no_crash", action="store_true",
+                    help="record only crash-free episodes (discard and resample any run that crashes)")
     args = ap.parse_args()
 
     cfg_path = args.config if os.path.isabs(args.config) else os.path.join(_REPO, args.config)
     cfg = load_config(cfg_path)
+    if args.duration is not None:
+        cfg["env"]["config"]["duration"] = args.duration
     min_seconds = args.seconds if args.seconds is not None else cfg["eval"].get("video_seconds", 30)
     out_path = args.out or (os.path.splitext(args.model)[0] + ("_shield.mp4" if args.shield else ".mp4"))
 
@@ -145,7 +162,8 @@ def main():
         model = load_model(args.model, args.algo)
     print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
     path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield,
-                                    min_seconds=min_seconds, hybrid=hybrid)
+                                    min_seconds=min_seconds, hybrid=hybrid,
+                                    no_crash=args.no_crash)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
