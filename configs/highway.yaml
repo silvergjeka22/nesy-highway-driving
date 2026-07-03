@@ -54,7 +54,11 @@ env:
     collision_reward: -1.0
     right_lane_reward: 0.0     # rewarding the rightmost lane biases AGAINST overtaking
                               # (which happens on the left); drop it so all native reward = speed.
-    high_speed_reward: 0.5    # speed is the prerequisite for overtaking (aggression).
+    high_speed_reward: 0.8    # speed is the prerequisite for overtaking (aggression). 0.8 makes a
+                              # clean fast episode (~64) dwarf both the passive slow mode (~2-14)
+                              # and the crash-sprint (~26) — sample-efficient learners (MACURA)
+                              # otherwise converge to "drive slowly forever" (measured: crash 4%
+                              # but 0.08 overtakes and return ≈ the aggressive mode's).
     lane_change_reward: 0.0
     reward_speed_range: [15, 30]   # floor BELOW the slowest target speed (20): braking to dodge
                               # a car still pays a little, so "slow briefly, then pass" is
@@ -86,10 +90,10 @@ shaping:
                             # road edge (also measured). The escape version can't be farmed: to
                             # earn it again you must slot behind another slow car and pass it.
                             # (highway-env's own lane_change_reward is dead config for highway-v0.)
-  survival_bonus: 0.1       # per step alive. Surviving as long as possible is an explicit goal,
-                            # and it makes "slow down when the gap is unsafe" pay (+0.1/step)
-                            # instead of earning exactly 0 below the speed-reward floor. Small on
-                            # purpose: hiding at 20 m/s earns 8/episode vs ~40 for fast passing.
+  survival_bonus: 0.02      # per step alive — a TIEBREAK, not an income: at 0.1 the guaranteed
+                            # 8/episode for merely existing matched the aggressive mode's return
+                            # and MACURA converged to "hide at low speed, never pass" (measured).
+                            # 0.02 still makes braking-for-safety pay > 0 without funding cowardice.
   blocked_penalty: 0.15     # per step stuck behind a close leader (within fsm.follow_gap).
                             # Makes "sit passively behind traffic" the WORST legal state:
                             # blocked-at-20 m/s earns 0.17+0.1-0.15 ≈ 0.12/step vs 0.27 free-slow
