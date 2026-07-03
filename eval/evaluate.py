@@ -67,6 +67,45 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
     return {"summary": _summarise(rows, count_violations), "episodes": rows, "seeds": seeds}
 
 
+def sanity_rollout(model, cfg, tag="model", max_steps=1000):
+    """Short test rollout (≤ ``max_steps``): is the controller sensible before full eval?
+
+    Prints the action mix, speed range, on-road %, lane changes, overtakes and
+    crashes of a deterministic rollout — a quick smell test that actions produce
+    sensible driving (no action-spam, car stays on the road, it does change lanes).
+    """
+    from collections import Counter
+
+    names = {0: "LANE_LEFT", 1: "IDLE", 2: "LANE_RIGHT", 3: "FASTER", 4: "SLOWER"}
+    env = create_environment(cfg)
+    acts = Counter()
+    speeds = []
+    lane_changes = overtakes = steps = crashes = offroad = eps = 0
+    obs, _ = env.reset(seed=cfg["seed"])
+    prev = read_scene(env)["ego"]["lane"]
+    while steps < max_steps:
+        a, _ = model.predict(obs, deterministic=True)
+        acts[names[int(a)]] += 1
+        obs, _, terminated, truncated, info = env.step(a)
+        sc = read_scene(env)
+        speeds.append(sc["ego"]["v"])
+        lane_changes += int(sc["ego"]["lane"] != prev)
+        prev = sc["ego"]["lane"]
+        offroad += int(info["is_offroad"])
+        steps += 1
+        if terminated or truncated:
+            crashes += int(info["crashed"])
+            overtakes += info["overtakes"]
+            eps += 1
+            obs, _ = env.reset()
+            prev = read_scene(env)["ego"]["lane"]
+    env.close()
+    print(f"[sanity {tag}] {steps} steps, {eps} episodes | "
+          f"speed {min(speeds):.0f}-{max(speeds):.0f} (mean {sum(speeds) / len(speeds):.1f}) m/s | "
+          f"on-road {100 * (1 - offroad / steps):.0f}% | lane_changes {lane_changes} | "
+          f"overtakes {overtakes} | crashes {crashes} | actions {dict(acts)}", flush=True)
+
+
 def _print_eval_progress(rows, seeds_done, seeds_total):
     """Running one-liner so a long evaluation shows the overtaking/crash picture live."""
     n = len(rows)

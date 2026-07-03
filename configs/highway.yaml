@@ -79,13 +79,21 @@ shaping:
   overtake_bonus: 3.0       # each car passed. ~6 steps of max-speed reward per pass: an 80-step
                             # episode that passes 4 cars earns ~48 vs ~13 for sitting behind a
                             # slow leader — staying behind is clearly the worst legal strategy.
-  lane_change_bonus: 0.5    # paid ONLY when a lane change escapes a blocked lane (slow leader
+  lane_change_bonus: 1.0    # paid ONLY when a lane change escapes a blocked lane (slow leader
                             # within 25 m) — the first link of the overtaking chain. Without any
                             # bonus the policy never changes lanes (measured: 0 changes); a flat
                             # any-change bonus gets farmed by spamming LANE_LEFT/RIGHT at the
                             # road edge (also measured). The escape version can't be farmed: to
                             # earn it again you must slot behind another slow car and pass it.
                             # (highway-env's own lane_change_reward is dead config for highway-v0.)
+  survival_bonus: 0.1       # per step alive. Surviving as long as possible is an explicit goal,
+                            # and it makes "slow down when the gap is unsafe" pay (+0.1/step)
+                            # instead of earning exactly 0 below the speed-reward floor. Small on
+                            # purpose: hiding at 20 m/s earns 8/episode vs ~40 for fast passing.
+  blocked_penalty: 0.15     # per step stuck behind a close leader (within fsm.follow_gap).
+                            # Makes "sit passively behind traffic" the WORST legal state:
+                            # blocked-at-20 m/s earns 0.17+0.1-0.15 ≈ 0.12/step vs 0.27 free-slow
+                            # vs ~0.6 fast — so the policy escapes (lane change) or backs off.
   offroad_penalty: 0.5      # leaving the road is clearly bad.
   collision_penalty: 8.0    # one-off crash penalty (applied on top of the native -1). With
                             # normalize_reward:false a crash must outweigh the speed earned
@@ -107,8 +115,9 @@ ppo:
                              # ends all future reward. 0.95 (10 s) was too short for either.
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.05             # exploration pressure: below this the policy settles on FASTER/IDLE
-                             # and never tries the lane changes that overtaking requires (measured).
+  ent_coef: 0.03             # exploration pressure, balanced: at 0.02 the policy settles on
+                             # FASTER/IDLE and never tries lane changes; at 0.05 the argmax stays
+                             # noisy — it spams cancelling LANE_LEFT/RIGHT requests (both measured).
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:

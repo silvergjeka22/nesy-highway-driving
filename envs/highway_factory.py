@@ -99,6 +99,8 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
             offroad_penalty=shaping.get("offroad_penalty", 0.0),
             collision_penalty=shaping.get("collision_penalty", 0.0),
             lane_change_bonus=shaping.get("lane_change_bonus", 0.0),
+            survival_bonus=shaping.get("survival_bonus", 0.0),
+            blocked_penalty=shaping.get("blocked_penalty", 0.0),
         )
 
     if logic_reward:
@@ -189,6 +191,7 @@ class OvertakeCounter(gym.Wrapper):
         info["escape_lane_change"] = bool(was_blocked and lane != self._lane)
         self._lane = lane
         self._blocked = self._is_blocked()
+        info["blocked"] = self._blocked
         info["is_offroad"] = self._is_offroad()
         return obs, reward, terminated, truncated, info
 
@@ -257,6 +260,12 @@ class RewardShapingWrapper(gym.Wrapper):
         and never discovers that passing needs lane changes (measured: 0 changes);
         paid on any change it gets farmed at the road edge (also measured) — so it
         pays only for the escape, the first link of the overtaking chain.
+      * ``survival_bonus`` — ``+bonus`` every step alive: surviving long is a goal
+        in itself, and it makes "slow down when the gap is unsafe" a paying move
+        (below the speed-reward floor, braking would otherwise earn exactly 0).
+      * ``blocked_penalty`` — ``-pen`` per step stuck behind a close leader:
+        camping behind traffic is the WORST legal state, so the policy either
+        escapes (lane change → bonus → pass) or at least keeps distance.
       * ``offroad_penalty`` — ``-pen`` per step off the road.
       * ``collision_penalty`` — one-off ``-pen`` on a crash. highway-env's
         ``normalize_reward`` squashes its native ``collision_reward`` to ~0 per step,
@@ -266,12 +275,14 @@ class RewardShapingWrapper(gym.Wrapper):
     """
 
     def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0,
-                 lane_change_bonus=0.0):
+                 lane_change_bonus=0.0, survival_bonus=0.0, blocked_penalty=0.0):
         super().__init__(env)
         self.overtake_bonus = float(overtake_bonus)
         self.offroad_penalty = float(offroad_penalty)
         self.collision_penalty = float(collision_penalty)
         self.lane_change_bonus = float(lane_change_bonus)
+        self.survival_bonus = float(survival_bonus)
+        self.blocked_penalty = float(blocked_penalty)
         self._prev_overtakes = 0
 
     def reset(self, **kwargs):
@@ -285,9 +296,11 @@ class RewardShapingWrapper(gym.Wrapper):
         passed = max(0, overtakes - self._prev_overtakes)
         self._prev_overtakes = overtakes
 
-        shaped = reward + self.overtake_bonus * passed
+        shaped = reward + self.overtake_bonus * passed + self.survival_bonus
         if info.get("escape_lane_change", False):
             shaped += self.lane_change_bonus
+        if info.get("blocked", False):
+            shaped -= self.blocked_penalty
         if info.get("is_offroad", False):
             shaped -= self.offroad_penalty
         if info.get("crashed", False):
