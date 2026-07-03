@@ -3,7 +3,7 @@
 # Nothing is hard-coded in the .py modules — every quantity lives here.
 # Loaded once per notebook via utils.load_config().
 #
-#   Part 1 (baseline) ....... env, shaping, ppo, dqn, eval
+#   Part 1 (baseline) ....... env, shaping, train, rppo, dqn, qrdqn, eval
 #   Part 2 (NeSy) ........... rules{}, fsm{}            -> nesy/ + labs/lab3,lab4
 #   Part 3 (MetaDrive) ...... metadrive{}, cbf{}, vo{}  -> envs/metadrive_factory + labs/lab1,2,5
 #   Part 4 (race) ........... race{}                    -> eval/record_race_video
@@ -45,7 +45,7 @@ env:
     lanes_count: 4
     vehicles_count: 25        # quick-run: fewer NPCs = faster stepping. Raise to ~50 (denser,
                               # harder traffic — much more to pass) for the FULL run, together
-                              # with offpolicy.shared.total_steps 20-30k.
+                              # with train.total_timesteps 30k.
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
@@ -58,9 +58,9 @@ env:
                               # (which happens on the left); drop it so all native reward = speed.
     high_speed_reward: 0.8    # speed is the prerequisite for overtaking (aggression). 0.8 makes a
                               # clean fast episode (~64) dwarf both the passive slow mode (~2-14)
-                              # and the crash-sprint (~26) — sample-efficient learners (MACURA)
-                              # otherwise converge to "drive slowly forever" (measured: crash 4%
-                              # but 0.08 overtakes and return ≈ the aggressive mode's).
+                              # and the crash-sprint (~26) — sample-efficient learners otherwise
+                              # converge to "drive slowly forever" (measured: crash 4% but 0.08
+                              # overtakes and return ≈ the aggressive mode's).
     lane_change_reward: 0.0
     reward_speed_range: [15, 30]   # floor BELOW the slowest target speed (20): braking to dodge
                               # a car still pays a little, so "slow briefly, then pass" is
@@ -94,7 +94,7 @@ shaping:
                             # (highway-env's own lane_change_reward is dead config for highway-v0.)
   survival_bonus: 0.02      # per step alive — a TIEBREAK, not an income: at 0.1 the guaranteed
                             # 8/episode for merely existing matched the aggressive mode's return
-                            # and MACURA converged to "hide at low speed, never pass" (measured).
+                            # and the policy converged to "hide at low speed, never pass" (measured).
                             # 0.02 still makes braking-for-safety pay > 0 without funding cowardice.
   blocked_penalty: 0.15     # per step stuck behind a close leader (within fsm.follow_gap).
                             # Makes "sit passively behind traffic" the WORST legal state:
@@ -106,12 +106,19 @@ shaping:
                             # by a reckless final sprint (~16 steps at 0.5/step) — this is the
                             # aggression<->safety dial: lower -> more crashes, higher -> timid.
 
-ppo:
-  policy: MlpPolicy
-  total_timesteps: 25000 #150000   # minimal-but-real budget: enough for PPO to learn overtake-without-
-                                   # crashing under the aggressive reward (below ~20k DQN just collapses
-                                   # to 100% crash and the comparison is meaningless). 150000 for the
-                                   # best policy. PPO & DQN share this budget (fair comparison).
+# The ONE training-budget switch — all three algorithms read it, so changing this
+# single number keeps the comparison fair by construction.
+train:
+  total_timesteps: 3000      # fast sanity budget. Raise to 30000 for the REAL run
+                             # (below ~20k the value-based learners collapse to a
+                             # trivial always-accelerate policy and the comparison
+                             # is meaningless).
+
+rppo:                        # RecurrentPPO (PPO-LSTM, sb3-contrib) — on-policy. The LSTM
+                             # carries memory across steps, so the identity-swapping sorted
+                             # Kinematics rows don't reset its intent mid-overtake: it can
+                             # commit to multi-step passes.
+  policy: MlpLstmPolicy
   learning_rate: 0.0005
   n_steps: 512               # rollout length before each update (standard for a real run)
   batch_size: 256
@@ -121,173 +128,67 @@ ppo:
                              # ends all future reward. 0.95 (10 s) was too short for either.
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.03             # exploration pressure, balanced: at 0.02 the policy settles on
-                             # FASTER/IDLE and never tries lane changes; at 0.05 the argmax stays
-                             # noisy — it spams cancelling LANE_LEFT/RIGHT requests (both measured).
+  ent_coef: 0.03             # HIGH exploration pressure (SB3 default is 0.0), balanced: at 0.02
+                             # the policy settles on FASTER/IDLE and never tries lane changes; at
+                             # 0.05 the argmax stays noisy — it spams cancelling LANE_LEFT/RIGHT
+                             # requests (both measured on plain PPO).
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
-    net_arch: [256, 256]
+    net_arch: [256, 256]     # same trunk as DQN/QR-DQN — comparable capacity
+    lstm_hidden_size: 128    # the memory that survives the sorted-row identity swaps
 
-dqn:
+dqn:                         # off-policy value-based baseline
   policy: MlpPolicy
-  total_timesteps: 25000 #150000   # SAME budget as PPO (fair comparison). Lower limit for real DQN
-                                   # learning; below ~20k it collapses to a trivial always-accelerate policy.
   learning_rate: 0.00025          # lower LR curbs DQN's Q-value overestimation/collapse over the run
   buffer_size: 50000
   learning_starts: 1000           # fill the buffer with diverse (incl. safe) transitions before learning
   batch_size: 128                 # steadier gradient estimates
-  gamma: 0.98                     # same horizon as PPO (see above) — fair comparison
+  gamma: 0.98                     # same horizon as RecurrentPPO — fair comparison
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 1000    # a stable target network over a 20k-step run
-  exploration_fraction: 0.5        # explore through ~half the run so the Q-net is well-trained before it goes greedy
+  target_update_interval: 1000    # a stable target network over the run
+  exploration_fraction: 0.5        # ε decays through half the run: long exploration pressure so it
+                                   # keeps trying lane changes before it goes greedy
   exploration_final_eps: 0.10      # retain some randomness so it can't commit to a crashing greedy policy
   policy_kwargs:
     net_arch: [256, 256]
 
-# =============================================================================
-# PART 1 (off-policy extension) — SAC vs MACURA (ICML 2024) on the hybrid action
-# a = (lane_cmd, speed_cmd): discrete lane choice + CONTINUOUS target speed.
-# Ported faithfully from "Trust the Model Where It Trusts Itself" (Frauenknecht
-# et al., arXiv:2405.19014); only QUANTITIES are scaled to a fast 3k-step GPU
-# run — the algorithmic logic (GJS uncertainty, adaptive κ, pink noise, Eq. 22)
-# is the paper's.
-# =============================================================================
-offpolicy:
-  env:
-    v_range: [15, 30]           # continuous target-speed range for the hybrid action [m/s]
-  shared:
-    total_steps: 3000           # FAST shakeout budget (GPU ~4 min) so both algorithms' learning
-                                # is visible quickly. For the full dense comparison raise this to
-                                # 20000-30000 AND env.config.vehicles_count to ~50 together —
-                                # dense traffic at a tiny budget just floors both at ~100% crash.
-    warmup_steps: 500           # random-action buffer seeding (paper: initial exploration)
-    epoch_length: 500           # "epoch" for model-data lifetime bookkeeping
-    max_episode_steps: 80       # env horizon (duration 40 s × 2 Hz) — pink-noise sequence length
-    batch_size: 256             # (paper)
-    buffer_size: 50000          # real-env buffer (>= total_steps; sized for 20-30k runs)
-    gamma: 0.98                 # same horizon as PPO/DQN — fair cross-comparison
-    tau: 0.005                  # (paper)
-    learning_rate: 3.0e-4       # (paper) actor, critics, alpha
-    real_ratio: 0.50            # P(update batch from the REAL buffer). In THIS env the obs is
-                                # distance-sorted rows that swap identity, so the learned model
-                                # blurs — imagined data must AUGMENT the real anchor, never
-                                # replace it (measured: at ~100% imagined the curve goes flat
-                                # while SAC keeps climbing). With Eq. 22 giving G≈10-15
-                                # updates/step, a 50% real share still means ~5-7 REAL-batch
-                                # gradient steps per env step vs SAC's 1 — THAT is the
-                                # sample-efficiency mechanism, imagined batches on top.
-    grad_clip_norm: 1.0         # numerical safeguard on high-G imagined updates
-  sac:                          # shared SAC backbone (both agents)
-    hidden_dim: 256
-    hidden_layers: 2
-    log_std_min: -20.0
-    log_std_max: 1.0            # capped so exploration noise can't saturate tanh
-    target_entropy: -4.0        # (deviation from the paper's -dim(A)=-2: with a 2-D action and
-                                # a tiny budget, -2 keeps the policy so wide that its deterministic
-                                # MEAN stays central = mid-speed, no committed lane changes
-                                # (measured: stochastic 1.3 passes/ep, deterministic 0). -4 anneals
-                                # α faster so the mean commits within the fast run.
-    target_update_interval: 1
-    alpha_init: 0.2
-  sac_baseline:                 # the model-free baseline
-    updates_per_step: 1         # (paper) 1 gradient step per env step
-    exploration: white          # (paper) standard SAC sampling
-    random_warmup: true
-  ensemble:                     # probabilistic dynamics ensemble (MACURA)
-    num_models: 3               # (adapted; paper 7)
-    num_elites: 3
-    hidden_dim: 200             # (paper)
-    hidden_layers: 4            # (paper)
-    learning_rate: 3.0e-4       # (paper)
-    weight_decay: 5.0e-5        # (paper)
-    batch_size: 256
-    validation_ratio: 0.2
-    patience: 5
-    improvement_threshold: 0.01
-    max_epochs: 8               # capped for the fast run (paper: to convergence)
-    min_log_var: -10.0
-    max_log_var: 0.5
-  model_based:                  # Dyna machinery (MACURA)
-    freq_train_model: 200       # retrain ensemble + regenerate rollouts every N env steps
-    effective_rollouts_per_step: 100   # rollout starts per round = this × freq
-    retain_epochs: 1
-    g_max: 20                   # base updates/step; MACURA scales it via Eq. 22 (paper uses 10-30;
-                                # 20 gives the 3k fast run enough imagined gradient steps to matter)
-    max_rollout_length: 8       # T_max — a FULL overtake (approach → pull out → pass →
-                                # return) takes ~6-10 imagined steps; at 5 imagination could
-                                # never contain one complete profitable pass (paper uses 10)
-    obs_clip: 2.0               # imagined states clamp (normalised Kinematics is in [-1,1])
-    reward_clip: 12.0           # imagined reward clamp (our real range ≈ [-9, +5])
-    term_prob_threshold: 0.5    # learned termination head: P(done) above ⇒ terminal
-    term_max_epochs: 20
-    # Imagined-crash test, matched to OUR observation (5 features/vehicle; highway-env
-    # normalises x by ±200 m and y by ±16 m, so overlap needs per-axis thresholds):
-    features_per_vehicle: 5
-    crash_x_distance: 0.03      # |Δx| < ~6 m (car length + margin), normalised
-    crash_y_distance: 0.13      # |Δy| < ~2 m (same lane), normalised
-    overtake_reward: 6.0        # imagined passes pay 2× the real bonus — UPSIDE OPTIMISM, the
-                                # risk-appetite dial for the model-based agent only. At the true
-                                # +3 MACURA's exact risk pricing refuses marginal passes and
-                                # stays behind traffic (measured: 2.06 passes/ep at 4% crash —
-                                # too timid). The crash cost stays TRUE (-9) so it still learns
-                                # WHICH gaps are safe: attempt more, select carefully. Raise for
-                                # more aggression, lower toward 3.0 for max safety. SAC untouched.
-                                # (Without any pricing the Gaussian reward blurs the rare +3
-                                # spike away entirely and MACURA never passes at all — measured.)
-    crash_reward: -9.0          # imagined crashes are priced at the KNOWN collision cost
-                                # (native -1 + shaping.collision_penalty 8): the learned
-                                # Gaussian reward blurs this rare spike away, which taught
-                                # the policy that crashing in imagination is cheap (measured:
-                                # crash rate ROSE to 98% as the imagined share ramped up)
-  macura:                       # the paper's own block
-    xi: 2.5                     # threshold scale ξ (paper tunes 0.3-30 per task). MUST be loose
-                                # here: the ensemble disagrees most exactly when a car crosses
-                                # from "ahead" to "behind" (the sorted rows swap identity) — i.e.
-                                # at the very moment an imagined PASS completes. A tight ξ
-                                # truncates rollouts right before every simulated overtake, so
-                                # the pass bonus is never paid and the policy stays shy
-                                # (measured: ξ 1.0 dropped eval passes 2.06 -> 0.55). Loose ξ
-                                # admits those noisy-but-crucial transitions; the 50% real
-                                # anchor keeps the noise from dominating.
-    zeta: 95                    # ζ-percentile of first-step uncertainties
-    unc_thresh_run_avg_history: 20   # rounds in κ's running average
-    tl_stopping: false          # dual stopping (the NeSy novelty, notebook 1 trains a 2nd MACURA
-                                # with this on): imagined rollouts also stop when a temporal-logic
-                                # rule fires (RG1 unsafe gap / RG3 over limit) — "do not learn
-                                # from imagined futures that break the law". Composable with the
-                                # shield: SAC must be vetoed at run time; MACURA can be taught
-                                # to not even PLAN illegal futures.
-    exploration: white          # DOCUMENTED DEVIATION from the paper's pink (β=1): on the hybrid
-                                # driving action, temporally-held pink excursions mean long slow
-                                # stretches / repeated lane commands — measured ~half SAC's
-                                # overtakes in the same 3k. White explores speed+lane per-step,
-                                # like the SAC baseline (fair comparison of the MODEL, not noise).
-  curriculum:                   # real-data-first ramp (identical for all model-based agents)
-    enabled: true
-    real_ratio_knots:           # imagination phases in early but NEVER takes over: the model
-      - {step: 0,    real_ratio: 1.00}    # is usable by ~800 (retrains every 200 steps), and the
-      - {step: 800,  real_ratio: 1.00}    # floor stays at 0.5 — real data anchors every step
-      - {step: 1500, real_ratio: 0.60}
-      - {step: 2500, real_ratio: 0.50}
-    warmup_exploration: null
-    warmup_exploration_until_step: 1000
+qrdqn:                       # QR-DQN (sb3-contrib) — off-policy DISTRIBUTIONAL value learner:
+                             # models the full return distribution per action instead of the
+                             # mean, so the rare crash spike isn't averaged away — it can tell
+                             # "risky fast lane" from "safe fast lane" where DQN sees one number.
+  policy: MlpPolicy
+  learning_rate: 0.00025          # same optimiser settings as DQN — the ONLY difference is
+  buffer_size: 50000              # the distributional head (fair ablation)
+  learning_starts: 1000
+  batch_size: 128
+  gamma: 0.98
+  train_freq: 4
+  gradient_steps: 1
+  target_update_interval: 1000
+  exploration_fraction: 0.5       # identical ε schedule to DQN
+  exploration_final_eps: 0.10
+  policy_kwargs:
+    net_arch: [256, 256]
+    n_quantiles: 50          # 50 quantiles of the return distribution (default 200 is
+                             # oversized for this small obs; 50 keeps the net comparable)
 
 eval:
   episodes_per_seed: 5
   deterministic: true
   video_episodes: 1          # episodes per video when no min length is requested
-  video_seconds: 30          # evaluate() saves a clip at least this long (PPO and DQN)
+  video_seconds: 30          # demo/demo.py records a clip at least this long
   video_max_episodes: 60     # cap on episodes stitched together to reach video_seconds
                              # (high enough that even DQN's short crashed episodes hit 30s)
   video_fps: 10
 
-# Best-model selection rule (Part 1) — explicit, not arbitrary. Among models
-# whose mean return is within `within_return_pct` of the top, pick by `rule`.
+# NeSy-method selection band (Part 2, eval.evaluate.select_nesy_method): configs
+# whose overtakes stay within this fraction of the baseline's remain eligible.
+# (The Part-1 winner rule — most overtakes, tie -> distance, among models that
+# actually pass — lives in the notebook's pick cell.)
 select:
-  within_return_pct: 0.10    # 10% band below the top mean return
-  rule: min_crash_rate       # safety-first: lowest crash rate wins (tie -> higher return)
+  within_return_pct: 0.10    # 10% band below the baseline
 
 # =============================================================================
 # PART 2 — NeSy rules (predicates -> shield -> logic-shaped reward)

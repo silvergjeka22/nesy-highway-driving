@@ -1,9 +1,12 @@
-"""RL trainers: PPO/DQN baselines (Part 1) and the logic-reward fine-tune (Part 2).
+"""RL trainers: the Part-1 discrete baselines (RecurrentPPO / DQN / QR-DQN) and
+the logic-reward fine-tune (Part 2).
 
 Function-only. Each trainer builds one plain env from the config, seeds
-everything, trains a stable-baselines3 model on the resolved device (CPU or
-GPU), saves the best-by-reward checkpoint, and returns the model. No top-level
-execution — the notebooks orchestrate.
+everything, trains a stable-baselines3 / sb3-contrib model on the resolved
+device (CPU or GPU), saves the best-by-reward checkpoint, and returns the
+model. All three read the SAME ``train.total_timesteps`` budget — one config
+number switches the whole comparison. No top-level execution — the notebooks
+orchestrate.
 """
 
 import math
@@ -11,7 +14,8 @@ import time
 
 import numpy as np
 
-from stable_baselines3 import PPO, DQN
+from stable_baselines3 import DQN
+from sb3_contrib import RecurrentPPO, QRDQN
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
@@ -19,7 +23,7 @@ from stable_baselines3.common.monitor import Monitor
 from utils import set_global_seeds, drive_path, curve_dir
 from envs.highway_factory import create_environment
 
-_ALGOS = {"ppo": PPO, "dqn": DQN}
+_ALGOS = {"rppo": RecurrentPPO, "dqn": DQN, "qrdqn": QRDQN}
 
 
 def _monitored_env(cfg, logic_reward=False):
@@ -136,8 +140,9 @@ def _attach_logger(model, cfg, tag):
     """Log training curves to ``metrics/curves/<tag>/progress.csv`` (CSV only).
 
     SB3 writes ``rollout/ep_rew_mean`` and ``rollout/ep_len_mean`` vs
-    ``time/total_timesteps`` there, so ``eval.plots.plot_training_curves`` can plot
-    PPO vs DQN. CSV-only keeps the console output to the clean progress lines.
+    ``time/total_timesteps`` there, so ``eval.plots.plot_training_curves`` can
+    compare the three algorithms. CSV-only keeps the console output to the clean
+    progress lines.
     """
     folder = curve_dir(cfg, tag)
     model.set_logger(configure(folder, ["csv"]))
@@ -156,12 +161,12 @@ def _effective_total(total_timesteps, rollout_steps):
 
 
 # =============================================================================
-# Part 1 — baselines on highway-env
+# Part 1 — the three discrete baselines on highway-env
 # =============================================================================
-def build_ppo(cfg, env, device=None):
-    """Construct the PPO model (on-policy policy-gradient) from the config."""
-    p = cfg["ppo"]
-    return PPO(
+def build_rppo(cfg, env, device=None):
+    """Construct the RecurrentPPO model (on-policy, PPO + LSTM) from the config."""
+    p = cfg["rppo"]
+    return RecurrentPPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
@@ -172,79 +177,118 @@ def build_ppo(cfg, env, device=None):
     )
 
 
-def build_dqn(cfg, env, device=None):
-    """Construct the DQN model (off-policy value-based) from the config."""
-    d = cfg["dqn"]
-    return DQN(
-        d["policy"], env,
-        learning_rate=d["learning_rate"], buffer_size=d["buffer_size"],
-        learning_starts=d["learning_starts"], batch_size=d["batch_size"],
-        gamma=d["gamma"], train_freq=d["train_freq"], gradient_steps=d["gradient_steps"],
-        target_update_interval=d["target_update_interval"],
-        exploration_fraction=d["exploration_fraction"],
-        exploration_final_eps=d["exploration_final_eps"],
-        policy_kwargs=d.get("policy_kwargs"), device=device or resolve_device(cfg),
+def _build_q_learner(cls, q, cfg, env, device):
+    """Shared constructor for the value-based pair — DQN and QR-DQN take the
+    same arguments, so the fair-ablation twin configs stay in lockstep."""
+    return cls(
+        q["policy"], env,
+        learning_rate=q["learning_rate"], buffer_size=q["buffer_size"],
+        learning_starts=q["learning_starts"], batch_size=q["batch_size"],
+        gamma=q["gamma"], train_freq=q["train_freq"], gradient_steps=q["gradient_steps"],
+        target_update_interval=q["target_update_interval"],
+        exploration_fraction=q["exploration_fraction"],
+        exploration_final_eps=q["exploration_final_eps"],
+        policy_kwargs=q.get("policy_kwargs"), device=device or resolve_device(cfg),
         seed=cfg["seed"], verbose=0,
     )
 
 
-def train_ppo(cfg, path=None):
-    """Train the PPO baseline (recommended) and checkpoint the best to Drive."""
-    set_global_seeds(cfg["seed"])
-    device = resolve_device(cfg)
-    env = _monitored_env(cfg)
-    model = build_ppo(cfg, env, device)
-    _attach_logger(model, cfg, "ppo")
+def build_dqn(cfg, env, device=None):
+    """Construct the DQN model (off-policy value-based) from the config."""
+    return _build_q_learner(DQN, cfg["dqn"], cfg, env, device)
 
-    path = path or drive_path(cfg, "checkpoints", "ppo.zip")
+
+def build_qrdqn(cfg, env, device=None):
+    """Construct the QR-DQN model (off-policy distributional) from the config."""
+    return _build_q_learner(QRDQN, cfg["qrdqn"], cfg, env, device)
+
+
+def _train(cfg, tag, model, env, rollout_steps, path=None):
+    """Shared training runner: attach the CSV logger, train for the ONE shared
+    ``train.total_timesteps`` budget with live progress + best-checkpointing,
+    and return the best model."""
+    _attach_logger(model, cfg, tag)
+    path = path or drive_path(cfg, "checkpoints", f"{tag}.zip")
     pf = cfg.get("print_freq", 200)
-    total = _effective_total(cfg["ppo"]["total_timesteps"], cfg["ppo"]["n_steps"])
-    print(f"[PPO] training for {total} steps on device='{device}' (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("PPO", pf, best_path=path, total_steps=total)
+    total = _effective_total(cfg["train"]["total_timesteps"], rollout_steps)
+    label = tag.upper()
+    print(f"[{label}] training for {total} steps on device='{model.device}' "
+          f"(printing every {pf} steps)…", flush=True)
+    printer = _ProgressPrinter(label, pf, best_path=path, total_steps=total)
     model.learn(total_timesteps=total, callback=printer)
 
     if printer.saved_best:
-        print(f"[PPO] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
-        model = PPO.load(path)
+        print(f"[{label}] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        model = type(model).load(path)
     else:
         model.save(path)
-        print(f"[PPO] done. saved final model -> {path}", flush=True)
+        print(f"[{label}] done. saved final model -> {path}", flush=True)
     env.close()
     return model
+
+
+def train_rppo(cfg, path=None):
+    """Train the RecurrentPPO baseline and checkpoint the best to Drive."""
+    set_global_seeds(cfg["seed"])
+    env = _monitored_env(cfg)
+    return _train(cfg, "rppo", build_rppo(cfg, env), env, cfg["rppo"]["n_steps"], path)
 
 
 def train_dqn(cfg, path=None):
-    """Train the DQN baseline (second baseline) and checkpoint the best to Drive."""
+    """Train the DQN baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
-    device = resolve_device(cfg)
     env = _monitored_env(cfg)
-    model = build_dqn(cfg, env, device)
-    _attach_logger(model, cfg, "dqn")
-
-    path = path or drive_path(cfg, "checkpoints", "dqn.zip")
-    pf = cfg.get("print_freq", 200)
     tf = cfg["dqn"]["train_freq"] if isinstance(cfg["dqn"]["train_freq"], int) else 1
-    total = _effective_total(cfg["dqn"]["total_timesteps"], tf)
-    print(f"[DQN] training for {total} steps on device='{device}' (printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("DQN", pf, best_path=path, total_steps=total)
-    model.learn(total_timesteps=total, callback=printer)
+    return _train(cfg, "dqn", build_dqn(cfg, env), env, tf, path)
 
-    if printer.saved_best:
-        print(f"[DQN] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
-        model = DQN.load(path)
-    else:
-        model.save(path)
-        print(f"[DQN] done. saved final model -> {path}", flush=True)
-    env.close()
-    return model
+
+def train_qrdqn(cfg, path=None):
+    """Train the QR-DQN baseline and checkpoint the best to Drive."""
+    set_global_seeds(cfg["seed"])
+    env = _monitored_env(cfg)
+    tf = cfg["qrdqn"]["train_freq"] if isinstance(cfg["qrdqn"]["train_freq"], int) else 1
+    return _train(cfg, "qrdqn", build_qrdqn(cfg, env), env, tf, path)
 
 
 def load_model(path, algo):
-    """Reload a saved checkpoint. ``algo`` is ``'ppo'`` or ``'dqn'``."""
+    """Reload a saved checkpoint. ``algo`` is ``'rppo'``, ``'dqn'`` or ``'qrdqn'``."""
     key = algo.lower()
     if key not in _ALGOS:
         raise ValueError(f"Unknown algo '{algo}'; expected one of {list(_ALGOS)}")
     return _ALGOS[key].load(path)
+
+
+class RecurrentPredictor:
+    """Stateful ``.predict`` facade for RecurrentPPO evaluation/demo.
+
+    A bare ``model.predict(obs)`` re-initialises the LSTM state on every call,
+    which reduces RecurrentPPO to a memoryless policy. This facade carries the
+    hidden state across steps; the shared eval/demo loops call ``reset_states()``
+    at each episode start (they check for the method with ``hasattr``, so
+    ordinary DQN/QR-DQN models pass through unchanged).
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.reset_states()
+
+    def reset_states(self):
+        self._state, self._episode_start = None, True
+
+    def predict(self, obs, deterministic=True):
+        action, self._state = self.model.predict(
+            obs, state=self._state,
+            episode_start=np.array([self._episode_start]),
+            deterministic=deterministic,
+        )
+        self._episode_start = False
+        return action, None
+
+
+def as_predictor(model, algo):
+    """Wrap a loaded model for the shared eval/demo loops: RecurrentPPO gets the
+    stateful LSTM facade, the feed-forward learners are returned as-is."""
+    return RecurrentPredictor(model) if algo.lower() == "rppo" else model
 
 
 # =============================================================================

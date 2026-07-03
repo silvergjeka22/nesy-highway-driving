@@ -133,7 +133,7 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
 def main():
     ap = argparse.ArgumentParser(description="Record a MetaDrive driving video (discrete model via the Lab-1 bridge).")
     ap.add_argument("--model", required=True, help="a discrete Part-1/Part-2 checkpoint (e.g. dqn.zip, part2_nesy.zip)")
-    ap.add_argument("--algo", default="ppo", choices=["ppo", "dqn"], help="algorithm of the checkpoint")
+    ap.add_argument("--algo", default="dqn", choices=["rppo", "dqn", "qrdqn"], help="algorithm of the checkpoint")
     ap.add_argument("--view", default="3d", choices=["3d", "topdown"],
                     help="3d chase camera (needs GPU) or cpu top-down (default: 3d)")
     ap.add_argument("--no-shield", action="store_true",

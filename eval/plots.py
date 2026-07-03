@@ -16,7 +16,7 @@ from utils import curve_dir, drive_path
 
 
 # =============================================================================
-# Part 1 — training curves (PPO vs DQN)
+# Part 1 — training curves (RecurrentPPO vs DQN vs QR-DQN)
 # =============================================================================
 def load_curve(cfg, tag):
     """Load one model's training curve from SB3's ``progress.csv``.
@@ -38,7 +38,7 @@ def load_curve(cfg, tag):
     return out.dropna(subset=["t"])
 
 
-def plot_training_curves(cfg, tags=("ppo", "dqn"), save=True):
+def plot_training_curves(cfg, tags=("rppo", "dqn", "qrdqn"), save=True):
     """Reward, episode length, overtakes/episode and crash rate vs timesteps.
 
     The overtakes panel is the one that shows the agent *learning to pass
@@ -79,6 +79,7 @@ def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
         ("crash_rate", lambda s: s["crash_rate"], None),
         ("distance (m)", lambda s: s["distance"]["mean"], lambda s: s["distance"]["std"]),
         ("overtakes (mean)", lambda s: s["overtakes"]["mean"], lambda s: s["overtakes"]["std"]),
+        ("lane changes (mean)", lambda s: s["lane_changes"]["mean"], lambda s: s["lane_changes"]["std"]),
         ("return (mean)", lambda s: s["return"]["mean"], lambda s: s["return"]["std"]),
         ("on_road %", lambda s: s["on_road_pct"]["mean"], lambda s: s["on_road_pct"]["std"]),
     ]

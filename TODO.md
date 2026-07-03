@@ -13,7 +13,8 @@ runnable end-to-end; the open items are stretch goals.
       `overtake_bonus` per pass, one-off `collision_penalty`, 2 Hz decisions
       (`policy_frequency: 2` — at 1 Hz collision avoidance is unlearnable and the crash rate
       floors at ~100%), `reward_speed_range: [15, 30]` so braking to dodge still pays a little.
-- [x] `train_ppo` / `train_dqn` (~25k steps each, same budget): live progress lines with
+- [x] `train_rppo` / `train_dqn` / `train_qrdqn` (one shared `train.total_timesteps` budget —
+      3k sanity / 30k real): live progress lines with
       **overtakes/ep, overtakes/100 steps and crash %**; the same numbers logged to
       `metrics/curves/<algo>/progress.csv` and plotted (4-panel training curves).
 - [x] `evaluate` (crash / on-road / overtakes + diagnostics / return / length, live per-seed

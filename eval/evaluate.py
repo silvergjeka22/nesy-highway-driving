@@ -82,6 +82,8 @@ def sanity_rollout(model, cfg, tag="model", max_steps=1000):
     speeds = []
     lane_changes = overtakes = steps = crashes = offroad = eps = 0
     obs, _ = env.reset(seed=cfg["seed"])
+    if hasattr(model, "reset_states"):     # RecurrentPPO: fresh LSTM state per episode
+        model.reset_states()
     prev = read_scene(env)["ego"]["lane"]
     while steps < max_steps:
         a, _ = model.predict(obs, deterministic=True)
@@ -98,6 +100,8 @@ def sanity_rollout(model, cfg, tag="model", max_steps=1000):
             overtakes += info["overtakes"]
             eps += 1
             obs, _ = env.reset()
+            if hasattr(model, "reset_states"):
+                model.reset_states()
             prev = read_scene(env)["ego"]["lane"]
     env.close()
     print(f"[sanity {tag}] {steps} steps, {eps} episodes | "
@@ -122,10 +126,12 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     from nesy.roadmap import predicates, safety_shield, rule_violations
 
     obs, info = env.reset(seed=seed)
+    if hasattr(model, "reset_states"):     # RecurrentPPO: fresh LSTM state per episode
+        model.reset_states()
     fsm_state = cfg["fsm"]["initial_state"]
     done = False
     ret = native_ret = 0.0
-    steps = offroad_steps = 0
+    steps = offroad_steps = lane_changes = 0
     viol = {k: 0 for k in _RULES}
     speed_sum = 0.0
     x_start = float(scene_fn(env)["ego"]["x"])   # forward-distance origin [m]
@@ -133,18 +139,13 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     while not done:
         action, _ = model.predict(obs, deterministic=deterministic)
 
-        # The shield decides from the CURRENT (pre-action) state. Discrete actions
-        # go through the FSM shield; the continuous hybrid (lane_cmd, speed_cmd)
-        # action goes through its FSM + CBF-speed-cap variant.
+        # The shield (Part 2) decides from the CURRENT (pre-action) state.
         if apply_shield:
-            if isinstance(action, np.ndarray) and action.shape == (2,):
-                from nesy.roadmap import hybrid_safety_shield
-                action, fsm_state = hybrid_safety_shield(action, scene_fn(env), fsm_state, cfg)
-            else:
-                preds = predicates(scene_fn(env), cfg)
-                action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
+            preds = predicates(scene_fn(env), cfg)
+            action, fsm_state = safety_shield(action, preds, fsm_state, cfg)
 
         obs, reward, terminated, truncated, info = env.step(action)
+        lane_changes += int(info.get("lane_changed", False))
 
         # The independent monitor audits the state the action LEADS TO — including the
         # terminal/crash state, where abrupt braking (RG2) and near-stall (RI1)
@@ -169,6 +170,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
         "crashed": crashed,
         "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
         "overtakes": int(info.get("overtakes", 0)),
+        "lane_changes": lane_changes,
         "return": ret,
         "native_return": native_ret,
         "length": steps,
@@ -192,6 +194,7 @@ def _summarise(rows, count_violations):
         "crash_rate": sum(1 for r in rows if r["crashed"]) / n if n else 0.0,
         "on_road_pct": ms("on_road_pct"),
         "overtakes": ms("overtakes"),
+        "lane_changes": ms("lane_changes"),
         "return": ms("return"),
         "native_return": ms("native_return"),
         "length": ms("length"),
@@ -257,9 +260,10 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
     fsm = cfg["fsm"]["initial_state"]
     _, ahead = count_passes_md(env, set())     # prime the overtake tracker
     x_start = float(read_scene_md(env)["ego"]["x"])
+    prev_lane = read_scene_md(env)["ego"].get("lane")
     done = False
     ret = 0.0
-    steps = offroad_steps = overtakes = 0
+    steps = offroad_steps = overtakes = lane_changes = 0
     viol = {k: 0 for k in _RULES}
     speed_sum = 0.0
 
@@ -269,6 +273,8 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
         passed, ahead = count_passes_md(env, ahead)
         overtakes += passed
         sc = read_scene_md(env)
+        lane_changes += int(sc["ego"].get("lane") != prev_lane)
+        prev_lane = sc["ego"].get("lane")
         for k, val in rule_violations(predicates(sc, cfg), cfg).items():
             viol[k] += int(val)
         speed_sum += float(sc["ego"].get("v", 0.0))
@@ -282,7 +288,8 @@ def _run_nesy_md_episode(model, env, seed, cfg, shield):
     return {
         "seed": seed, "crashed": crashed,
         "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
-        "overtakes": int(overtakes), "return": ret, "native_return": ret, "length": steps,
+        "overtakes": int(overtakes), "lane_changes": lane_changes,
+        "return": ret, "native_return": ret, "length": steps,
         "distance": float(read_scene_md(env)["ego"]["x"]) - x_start,
         "violations": viol, "viol_steps": steps,
         "mean_speed": speed_sum / steps if steps else 0.0,

@@ -14,8 +14,8 @@ law formalised in temporal logic.
 
 ## 1. The idea in one paragraph
 
-Train a car to drive and overtake safely on a highway using **standard model-free RL** — **PPO**
-(recommended) with **DQN** as a second baseline — over a **discrete tactical action space**
+Train a car to drive and overtake safely on a highway using **standard model-free RL** —
+**RecurrentPPO** (PPO-LSTM), **DQN** and **QR-DQN** — over a **discrete tactical action space**
 (`LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER`). The low-level controller handles steering/throttle;
 the agent only picks the manoeuvre. That choice is the hinge: symbolic driving rules are naturally
 written over *manoeuvres* ("don't change left unless the left gap is safe"), so the NeSy layer can
@@ -63,12 +63,12 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
 
 | Notebook | Part | What it does | Saved to Drive |
 |---|---|---|---|
-| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN** to overtake aggressively, evaluate + compare, pick the **best** | `ppo.zip`/`dqn.zip`/`part1_best.zip` **+ `part1_best.mp4`** + plots |
+| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **RecurrentPPO vs DQN vs QR-DQN** to overtake aggressively, evaluate + compare, pick the **best** | `rppo.zip`/`dqn.zip`/`qrdqn.zip`/`part1_best.zip` **+ `part1_best.mp4`** + plots |
 | [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, compare the four configs, pick the best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
 | [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | run the **second-best** algorithm on **MetaDrive** via the labs (velocity action, CBF/VO) | metrics + **`part3_metadrive.mp4`** (3D) |
 | [`colab_4_race.ipynb`](notebooks/colab_4_race.ipynb) | **Part 4** | **race** the NeSy agent vs the no-NeSy baseline in one scene | race scorecard **+ `part4_race.mp4`** |
 
-### Part 1 — baseline: compare PPO vs DQN, save the best (`colab_1_baseline.ipynb`)
+### Part 1 — baseline: RecurrentPPO vs DQN vs QR-DQN, save the best (`colab_1_baseline.ipynb`)
 
 1. **Setup** — mount Drive, clone the repo (token prompt), `pip install`, load `configs/highway.yaml`.
 2. **Study & explain the environment** — `highway-v0`, the discrete meta-actions, the `Kinematics`
@@ -79,23 +79,27 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
    car passed and a one-off `collision_penalty` per crash. Getting ahead is the only way to earn,
    crashing the only big cost — the baseline learns to pass traffic and take risks, which is
    exactly the rule-breaking raw material Part 2 needs.
-4. **Train both baselines** on the same env/seeds/budget (~25k steps — real learning, not a smoke
-   run). The live progress lines and the training curves show **overtakes/episode and crash rate
-   over time** next to the reward, so learning-to-pass is visible as it happens
+4. **Train all three baselines** on the same env/seeds and the ONE shared budget
+   (`train.total_timesteps` — 3k as a fast sanity check, 30k for the real run; a single number
+   switches all three). The live progress lines and the training curves show **overtakes/episode
+   and crash rate over time** next to the reward, so learning-to-pass is visible as it happens
    (`metrics/curves/<algo>/progress.csv`).
 
    | Algorithm | Type | Why |
    |---|---|---|
-   | **PPO** | on-policy policy-gradient | **recommended**; on-policy avoids replaying stale noisy transitions; clipped objective tolerates shaping; clean credit assignment for multi-step overtakes |
-   | **DQN** | off-policy value-based | second baseline; more sample-efficient on discrete actions but more brittle in noisy traffic |
+   | **RecurrentPPO** (PPO-LSTM, sb3-contrib) | on-policy policy-gradient | the LSTM carries intent across the identity-swapping sorted observation rows, so it commits to multi-step overtakes |
+   | **DQN** | off-policy value-based | sample-efficient on discrete actions but more brittle in noisy traffic |
+   | **QR-DQN** (sb3-contrib) | off-policy distributional | learns return quantiles, so the rare crash spike isn't averaged away — DQN's exact ablation twin |
 
-5. **Evaluate + compare** on the same held-out seeds: crash rate, on-road %, overtakes/episode,
-   return, length — mean ± std, side by side, with a **comparison bar chart** and overtaking
-   diagnostics (overtakes per 100 steps, % episodes with ≥1 pass, max passes) so a crash-shortened
-   episode isn't mistaken for "the car never overtakes".
-6. **Pick the best** (lowest crash rate, then most overtakes) → save `part1_best.zip` +
-   `part1_best.json` (which algorithm won — Parts 2-4 read these), then record the ≥30s
-   **`part1_best.mp4`** with `demo/demo.py` (separate process, prints overtakes while recording).
+5. **Evaluate + compare** on the same held-out seeds: crash rate, forward distance / steps
+   survived, overtakes/episode, lane-changes/episode, on-road %, return — mean ± std, side by
+   side, with a **comparison bar chart** and overtaking diagnostics (overtakes per 100 steps,
+   % episodes with ≥1 pass, max passes) so a crash-shortened episode isn't mistaken for "the car
+   never overtakes".
+6. **Pick the winner** (most overtakes, tie → distance, among models that actually learn to pass)
+   → save `part1_best.zip` + `part1_best.json` (which algorithm won — Parts 2-4 read these), then
+   record the ≥30s **`part1_best.mp4`** with `demo/demo.py` (separate process, prints overtakes
+   while recording).
 
 ### Part 2 — NeSy + XAI: shield vs reward shaping (`colab_2_nesy.ipynb`)
 
@@ -204,7 +208,7 @@ nesy-highway-driving/
 ├── envs/
 │   ├── highway_factory.py        # create_environment(cfg), read_scene(env), reward wrappers [Parts 1-2,4]
 │   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), the Lab-1 bridge     [Part 3]
-├── agents/baselines.py           # train_ppo/dqn, load_model, finetune_logic_reward
+├── agents/baselines.py           # train_rppo/dqn/qrdqn, load_model, finetune_logic_reward
 ├── eval/
 │   ├── evaluate.py               # evaluate(), evaluate_nesy_md(), select_nesy_method()
 │   ├── plots.py                  # plot_training_curves(), plot_eval_comparison(), plot_violation_rates()
@@ -235,7 +239,7 @@ nesy-highway-driving/
 
 **Evaluation metrics:** crash rate · on-road % · overtakes/episode (+ overtakes per 100 steps, %
 episodes with an overtake, max overtakes) · return · episode length · **plus** per-rule violation
-rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
+rate (independent monitor). All three Part-1 algorithms and every NeSy config on the same seeds.
 
 ---
 
@@ -245,7 +249,7 @@ rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
 2. Provide a **GitHub token** at the hidden prompt (the repo is private); the setup cell clones it
    and installs the dependencies.
 3. Run the parts in order — each loads the previous part's checkpoints from Drive:
-   **Part 1** (trains `ppo.zip`/`dqn.zip`, saves `part1_best.zip` + `part1_best.json`) →
+   **Part 1** (trains `rppo.zip`/`dqn.zip`/`qrdqn.zip`, saves `part1_best.zip` + `part1_best.json`) →
    **Part 2** (loads `part1_best`, saves `part2_nesy.zip`) → **Part 3** / **Part 4**.
 4. **Part 3 only:** MetaDrive needs Python ≤ 3.11, so its first cell installs **condacolab
    (Python 3.10)** and restarts the kernel once — expected; just Run all again. The **3D video

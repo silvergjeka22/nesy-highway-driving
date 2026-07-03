@@ -199,38 +199,6 @@ def safest_fallback(preds, cfg, allowed=None):
     return "SLOWER"
 
 
-def hybrid_safety_shield(action, scene, fsm_state, cfg):
-    """Shield for the continuous hybrid action ``(lane_cmd, speed_cmd)`` (SAC/MACURA).
-
-    The lane component is masked by the SAME discrete FSM shield (it lives in the
-    manoeuvre vocabulary); the continuous speed component is capped by the hard
-    speed rules — RG3 (legal limit) and the RG1 CBF bound ``v ≤ v_lead + γ·h``
-    (h = gap − RSS safe distance, the same barrier as Part 3's Lab-5 filter).
-    Returns ``(safe_action, new_fsm_state)``.
-    """
-    import numpy as np
-
-    lane_map = {"LANE_LEFT": -1.0, "IDLE": 0.0, "LANE_RIGHT": 1.0}
-    v_lo, v_hi = cfg["offpolicy"]["env"]["v_range"]
-    r = cfg["rules"]
-
-    preds = predicates(scene, cfg)
-    lane_idx = 0 if action[0] < -0.5 else (2 if action[0] > 0.5 else 1)
-    safe_idx, fsm_state = safety_shield(lane_idx, preds, fsm_state, cfg)
-    lane_cmd = lane_map.get(ACTIONS[int(safe_idx)], 0.0)
-
-    v_des = v_lo + (float(np.clip(action[1], -1.0, 1.0)) + 1.0) / 2.0 * (v_hi - v_lo)
-    v_cap = float(r["v_max"])                                   # RG3
-    leader = nearest_leader(scene["ego"], scene.get("others", []))
-    if leader is not None:                                      # RG1 CBF speed bound
-        h = (leader["x"] - scene["ego"]["x"]) - r["car_length"] \
-            - safe_distance(scene["ego"]["v"], leader["v"], r)
-        v_cap = min(v_cap, max(0.0, leader["v"] + cfg["cbf"]["gamma"] * h))
-    v_safe = min(v_des, v_cap)
-    speed_cmd = 2.0 * (v_safe - v_lo) / (v_hi - v_lo) - 1.0
-    return np.array([lane_cmd, np.clip(speed_cmd, -1.0, 1.0)], dtype=np.float32), fsm_state
-
-
 # =============================================================================
 # Part 3 — continuous shield (CBF + velocity obstacles) on the (v, ω) action
 # =============================================================================
