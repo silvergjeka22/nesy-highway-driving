@@ -51,7 +51,38 @@ def make_race_env(cfg, n_agents=2, render=False):
         render_mode="rgb_array" if render else None,
         config=env_cfg,
     )
+    if cfg["race"].get("no_target_collisions", True):
+        env = _NoTargetCollisions(env)
     return env
+
+
+class _NoTargetCollisions(gym.Wrapper):
+    """``race.no_target_collisions``: the controlled cars pass through EACH OTHER.
+
+    A rival should be beaten by driving, not by being crashed into — so a
+    controlled-vs-controlled contact never sets ``crashed``, while contact with
+    background traffic behaves exactly as before. highway-env resolves collisions
+    pairwise through each vehicle's ``handle_collisions(other, dt)``, so after
+    every reset (vehicles are recreated) this re-binds that method on each
+    controlled vehicle to skip only the other controlled vehicle(s).
+    """
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        controlled = list(self.env.unwrapped.controlled_vehicles)
+        controlled_ids = {id(v) for v in controlled}
+        for v in controlled:
+            v.handle_collisions = _skip_controlled(v.handle_collisions, controlled_ids)
+        return obs, info
+
+
+def _skip_controlled(handle_collisions, controlled_ids):
+    """Wrap a vehicle's bound ``handle_collisions`` to ignore controlled vehicles."""
+    def handler(other, dt=0):
+        if id(other) in controlled_ids:
+            return
+        return handle_collisions(other, dt)
+    return handler
 
 
 def race(model_a, model_b, cfg, seeds=None):
@@ -93,6 +124,9 @@ def _run_race(model_a, model_b, env, seed, cfg, swap=False):
     models = {slot_b: model_b, 1 - slot_b: model_a}
 
     obs, info = env.reset(seed=seed)
+    for m in (model_a, model_b):       # RecurrentPPO facade: fresh LSTM state per race
+        if hasattr(m, "reset_states"):
+            m.reset_states()
     u = env.unwrapped
     start_x = [float(u.controlled_vehicles[i].position[0]) for i in (0, 1)]
     ahead = [_ahead_ids(env, i) for i in (0, 1)]
@@ -156,6 +190,9 @@ def record_race_video(model_a, model_b, cfg, path, seed=None):
     frames = []
     try:
         obs, _ = env.reset(seed=int(seed))
+        for m in (model_a, model_b):   # RecurrentPPO facade: fresh LSTM state
+            if hasattr(m, "reset_states"):
+                m.reset_states()
         fsm_b = cfg["fsm"]["initial_state"]
         done = False
         steps = 0

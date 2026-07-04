@@ -328,6 +328,9 @@ vo:
 race:
   seeds: [2000, 2001, 2002, 2003, 2004, 2005]   # even count: start slots swap on alternate seeds
   duration: 60              # race length [s] — longer than Part 1's episodes so there is room to pass
+  no_target_collisions: true   # the two CONTROLLED cars pass through each other (a rival must be
+                               # beaten by driving, not by being crashed into); background unchanged
+
   horizon: 1000             # hard safety cap on steps per race
   winner_metric: distance   # "distance" travelled, or "overtakes"
   video_seconds: 30

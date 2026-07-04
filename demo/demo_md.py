@@ -29,8 +29,35 @@ import numpy as np  # noqa: E402
 from utils import load_config, save_mp4  # noqa: E402
 from agents.baselines import load_model  # noqa: E402
 from envs.metadrive_factory import (  # noqa: E402
-    make_env_md, nesy_md_action, count_passes_md, VelocityActionWrapper,
+    make_env_md, nesy_md_action, count_passes_md, read_scene_md, VelocityActionWrapper,
 )
+
+
+def draw_telemetry(frame, v, omega, fsm_state=None):
+    """Print live telemetry onto one video frame; returns the annotated RGB array.
+
+    Top-left corner, white on black: the ego's current speed ``v`` [m/s], the
+    commanded yaw-rate ``omega`` [rad/s], and (when given) the FSM state. Pure
+    function on the pixel array — works for both the 3D chase-cam and the
+    top-down frames. PIL is already a dependency (imageio/matplotlib stack).
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
+    draw = ImageDraw.Draw(img)
+    size = max(14, img.height // 30)
+    try:
+        font = ImageFont.load_default(size=size)     # Pillow >= 10
+    except TypeError:                                 # older Pillow: fixed-size bitmap font
+        font = ImageFont.load_default()
+    text = f"v = {v:5.2f} m/s\nomega = {omega:+.2f} rad/s"
+    if fsm_state:
+        text += f"\nFSM: {fsm_state}"
+    pad = max(4, size // 3)
+    box = draw.multiline_textbbox((pad, pad), text, font=font)
+    draw.rectangle((0, 0, box[2] + pad, box[3] + pad), fill=(0, 0, 0))
+    draw.multiline_text((pad, pad), text, fill=(255, 255, 255), font=font)
+    return np.asarray(img)
 
 
 def _build_3d_env(cfg, seed):
@@ -86,6 +113,12 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
                 steps += 1
                 frame = grab_frame(env, obs)
                 if frame is not None:
+                    # Live telemetry on every frame: measured ego speed + the
+                    # commanded yaw-rate (the normalised action × omega_max).
+                    frame = draw_telemetry(
+                        frame, read_scene_md(env)["ego"]["v"],
+                        float(action[1]) * cfg["metadrive"]["omega_max"],
+                        fsm_state=fsm)
                     frames.append(np.asarray(frame))
                 done = terminated or truncated
             total_ot += ot
