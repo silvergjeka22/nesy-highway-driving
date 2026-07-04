@@ -123,10 +123,10 @@ shaping:
 # The ONE training-budget switch — all three algorithms read it, so changing this
 # single number keeps the comparison fair by construction.
 train:
-  total_timesteps: 30000     # FULL run. Drop to 3000 for a fast sanity check
-                             # (below ~20k the value-based learners collapse to a
-                             # trivial always-accelerate policy and the comparison
-                             # is meaningless).
+  total_timesteps: 20000     # FULL run (all three algorithms read this one number).
+                             # 20k is the floor for a meaningful comparison — below it
+                             # the value-based learners collapse to a trivial always-
+                             # accelerate policy. Drop to 3000 only for a fast sanity check.
 
 rppo:                        # RecurrentPPO (PPO-LSTM, sb3-contrib) — on-policy. The LSTM
                              # carries memory across steps, so the identity-swapping sorted
