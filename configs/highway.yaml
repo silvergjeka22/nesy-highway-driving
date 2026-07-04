@@ -115,10 +115,16 @@ shaping:
                             # blocked-at-20 m/s earns 0.17+0.1-0.15 ≈ 0.12/step vs 0.27 free-slow
                             # vs ~0.6 fast — so the policy escapes (lane change) or backs off.
   offroad_penalty: 0.5      # leaving the road is clearly bad.
-  collision_penalty: 8.0    # one-off crash penalty (applied on top of the native -1). With
-                            # normalize_reward:false a crash must outweigh the speed earned
-                            # by a reckless final sprint (~16 steps at 0.5/step) — this is the
-                            # aggression<->safety dial: lower -> more crashes, higher -> timid.
+  collision_penalty: 18.0   # one-off crash penalty (on top of the native -1). Must outweigh the
+                            # PASSES earned in a short sprint, not just the speed: with
+                            # overtake_bonus 7, a 2-pass sprint earns ~+20 gross, so at the old 8
+                            # (crash -9) crashing after 2 passes still NETTED +11 — the policy
+                            # crash-sprinted (measured: ep_len flat ~16, crash 100%, overtakes 12/
+                            # 100 steps). At 18 (crash -19) that sprint nets ~0, so passing-while-
+                            # crashing stops paying and the only positive strategy left is passing
+                            # WITHOUT crashing (camping already pays ~0 under the [20,30] floor).
+                            # THE safety dial: higher -> longer survival/fewer crashes, lower ->
+                            # more reckless. Pair it with overtake_bonus (the aggression dial).
 
 # The ONE training-budget switch — all three algorithms read it, so changing this
 # single number keeps the comparison fair by construction.
