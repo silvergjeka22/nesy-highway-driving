@@ -294,12 +294,18 @@ finetune:
 metadrive:
   enabled: true
   map: "SSSS"               # straight segments (good for overtaking + racing)
-  traffic_density: 0.2
+  traffic_density: 0.3      # more NPCs to pass than the old 0.2 (something to overtake)
   num_scenarios: 50
   horizon: 1000
   # Continuous velocity action (Lab 1 cmd_vel): a = (v, omega).
-  v_max: 10.0               # max commandable linear speed [m/s] (robot scale)
+  v_max: 15.0               # max commandable linear speed [m/s]. Raised above the ~10 m/s
+                            # MetaDrive traffic so the ego can actually pull ahead and pass;
+                            # the FASTER step is 0.2*v_max, the ceiling scales with it.
   omega_max: 0.6            # max angular speed [rad/s]
+  obs_speed_scale: 4.0      # multiply MetaDrive robot-scale speeds (~5 m/s) up to the
+                            # highway scale (~20 m/s) the policy was TRAINED on, so the
+                            # reconstructed observation lands in its learned regime and it
+                            # commits to overtakes instead of reading itself as stationary.
   lidar_num_lasers: 72
   # Video (demo/demo_md.py): 3D chase camera on a GPU runtime, else CPU top-down.
   video_seconds: 30         # clip length (>= 30 s required)
@@ -312,8 +318,9 @@ metadrive:
 cbf:
   enabled: true
   gamma: 1.0                # class-K gain for the barrier: h_dot >= -gamma * h
-  v_max: 8.0                # RG3 legal speed limit [m/s] (below the 10 m/s action max,
-                            # so the filter actually caps a "go fast" command)
+  v_max: 12.0               # RG3 legal speed limit [m/s]. Above MetaDrive traffic (~10) so
+                            # the SHIELDED ego can still pass, but below the 15 m/s action max
+                            # so the filter genuinely caps a reckless "go flat out" command.
   v_min: 2.0               # RI1: no gratuitous standstill — keep at least this speed
                             # unless RG1/off-road demand braking (safety overrides)
   omega_max: 0.6            # steering-rate actuator limit [rad/s]

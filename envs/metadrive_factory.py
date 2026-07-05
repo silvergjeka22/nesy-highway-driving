@@ -118,15 +118,18 @@ def kin_obs_from_scene(scene, cfg):
     and clipped, then zero-padded to ``vehicles_count`` rows.
 
     Pure function (scene -> ``(vehicles_count, n_features)`` array) so it is unit-testable
-    without MetaDrive. **Approximate**: highway-env's speed scale (~25 m/s) differs from
-    MetaDrive's robot scale (~8 m/s), so the ego-speed feature reads lower than the model
-    saw in training — the policy still acts, but not identically.
+    without MetaDrive. **Scale correction**: highway-env's speed scale (~25 m/s) differs
+    from MetaDrive's robot scale (~5 m/s), so without help the ego-speed feature reads ~4×
+    lower than the model ever saw — it thinks it is crawling and never commits to a pass.
+    ``metadrive.obs_speed_scale`` multiplies the velocity features back up into the policy's
+    trained range, so it drives (and overtakes) the way it learned to on highway-env.
     """
     oc = cfg["env"]["config"]["observation"]
     feats = oc.get("features", ["presence", "x", "y", "vx", "vy"])
     n = oc.get("vehicles_count", 5)
     max_v = 40.0                                   # highway_env Vehicle.MAX_SPEED
     lanes = cfg["env"]["config"].get("lanes_count", 4)
+    vscale = float(cfg.get("metadrive", {}).get("obs_speed_scale", 1.0))   # robot -> highway speed
     rng = {"x": (-5 * max_v, 5 * max_v), "y": (-4.0 * lanes, 4.0 * lanes),
            "vx": (-2 * max_v, 2 * max_v), "vy": (-2 * max_v, 2 * max_v)}
 
@@ -140,7 +143,7 @@ def kin_obs_from_scene(scene, cfg):
         bx, by, bvx, bvy = (ego["x"], ego["y"], ego["vx"], ego["vy"]) if relative else (0.0, 0.0, 0.0, 0.0)
         full = {"presence": 1.0,
                 "x": nz(vd["x"] - bx, "x"), "y": nz(vd["y"] - by, "y"),
-                "vx": nz(vd["vx"] - bvx, "vx"), "vy": nz(vd["vy"] - bvy, "vy")}
+                "vx": nz((vd["vx"] - bvx) * vscale, "vx"), "vy": nz((vd["vy"] - bvy) * vscale, "vy")}
         return [full[f] for f in feats]
 
     rows = [make_row(ego, relative=False)]
