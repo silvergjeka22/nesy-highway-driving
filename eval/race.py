@@ -45,6 +45,7 @@ def make_race_env(cfg, n_agents=2, render=False):
 
     if render:
         _ensure_render_backend()
+        env_cfg["offscreen_rendering"] = True   # avoid the display window that segfaults on Colab
 
     env = gym.make(
         cfg["env"]["id"],

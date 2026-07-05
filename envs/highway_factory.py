@@ -80,14 +80,21 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
         A Gymnasium env (constant-shape Kinematics obs, DiscreteMetaAction).
     """
     env_cfg = cfg["env"]
+    render_config = dict(env_cfg["config"])
 
     if render:
         _ensure_render_backend()
+        # Render to an offscreen pygame.Surface instead of a display window: this
+        # skips the pygame.display.set_mode() call that SEGFAULTS (exit -11) on
+        # Colab's headless VM, so the video subprocess produces frames whether it
+        # runs on plain pygame or pygame-ce. xvfb (above) still supplies a real
+        # video driver so the frames are drawn, not blank.
+        render_config["offscreen_rendering"] = True
 
     env = gym.make(
         env_cfg["id"],
         render_mode="rgb_array" if render else None,
-        config=env_cfg["config"],
+        config=render_config,
     )
 
     # "blocked" reuses the FSM's follow-gap: one notion of "stuck behind a leader".
