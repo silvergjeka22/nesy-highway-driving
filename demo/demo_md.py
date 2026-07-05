@@ -28,14 +28,15 @@ try:
 except OSError:
     pass
 
-# panda3d's 3D engine defaults to GLX, which needs an X display. On headless Colab
-# there is none → segfault. Fix: switch panda3d to EGL (renders directly on the GPU,
-# no X needed). This MUST happen before MetaDrive creates the panda3d engine.
-# Always set it — even if DISPLAY is set (a stale xvfb doesn't support GL).
+# panda3d's 3D engine defaults to GLX, which segfaults on headless Colab (no X).
+# EGL (p3headlessgl) also segfaults on Colab's T4 driver. Last resort: p3tinydisplay
+# is a pure SOFTWARE 3D renderer — no GPU rendering, no driver bugs. Lower quality
+# (no shaders) but produces real 3D geometry frames. MUST be set before MetaDrive
+# creates the panda3d engine.
 try:
     from panda3d.core import loadPrcFileData
-    loadPrcFileData("", "load-display p3headlessgl")
-    print("[demo] configured panda3d for headless EGL rendering")
+    loadPrcFileData("", "load-display p3tinydisplay")
+    print("[demo] configured panda3d software 3D renderer (p3tinydisplay)")
 except Exception:
     pass
 
