@@ -28,6 +28,16 @@ try:
 except OSError:
     pass
 
+# panda3d's 3D engine renders via GLX, which needs an X display. On headless Colab
+# there is none → segfault. Start xvfb BEFORE MetaDrive creates the panda3d engine.
+if not os.environ.get("DISPLAY"):
+    try:
+        from pyvirtualdisplay import Display
+        Display(visible=0, size=(800, 800), color_depth=24).start()
+        print("[demo] started xvfb virtual display for 3D rendering")
+    except Exception:
+        pass
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
