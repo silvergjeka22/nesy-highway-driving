@@ -28,34 +28,34 @@ try:
 except OSError:
     pass
 
-# Headless 3D rendering: panda3d needs a GLX display. On headless Colab:
+# Headless 3D rendering: panda3d needs a GLX display. On Colab (GPU or CPU):
 #   - NVIDIA's GLX segfaults (no indirect rendering support on T4)
 #   - EGL (p3headlessgl) segfaults (T4 driver bug in panda3d)
 #   - p3tinydisplay works but shows all-pink (can't load textures)
-# Solution: Xvfb (virtual X display) + LIBGL_ALWAYS_SOFTWARE=1 forces Mesa's
-# llvmpipe software OpenGL — full GL with textures, roads, cars, just CPU-rendered.
-if not os.environ.get("DISPLAY"):
-    import shutil
-    import subprocess as _sp
-    _xvfb_bin = shutil.which("Xvfb")
-    if _xvfb_bin:
-        os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
-        _xvfb_proc = _sp.Popen(
-            [_xvfb_bin, ":99", "-screen", "0", "800x800x24", "+extension", "GLX"],
-            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        import time
-        time.sleep(0.5)
-        os.environ["DISPLAY"] = ":99"
-        import atexit
-        atexit.register(_xvfb_proc.kill)
-        print("[demo] started Xvfb :99 + Mesa software GL for headless 3D")
-    else:
-        try:
-            from panda3d.core import loadPrcFileData
-            loadPrcFileData("", "load-display p3tinydisplay")
-            print("[demo] WARNING: no Xvfb — using p3tinydisplay (frames may be pink)")
-        except Exception:
-            pass
+# Solution: ALWAYS force Mesa software OpenGL (LIBGL_ALWAYS_SOFTWARE=1) and
+# start our own Xvfb — even when DISPLAY is already set, because Colab's GPU
+# runtime sets DISPLAY but has no real X server behind it.
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+import shutil
+import subprocess as _sp
+_xvfb_bin = shutil.which("Xvfb")
+if _xvfb_bin:
+    _xvfb_proc = _sp.Popen(
+        [_xvfb_bin, ":99", "-screen", "0", "800x800x24", "+extension", "GLX"],
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    import time
+    time.sleep(0.5)
+    os.environ["DISPLAY"] = ":99"
+    import atexit
+    atexit.register(_xvfb_proc.kill)
+    print("[demo] started Xvfb :99 + Mesa software GL for headless 3D")
+else:
+    try:
+        from panda3d.core import loadPrcFileData
+        loadPrcFileData("", "load-display p3tinydisplay")
+        print("[demo] WARNING: no Xvfb — using p3tinydisplay (frames may be pink)")
+    except Exception:
+        pass
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
