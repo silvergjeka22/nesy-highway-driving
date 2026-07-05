@@ -20,6 +20,12 @@ import argparse
 import traceback
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
+# "XDG_RUNTIME_DIR not set" is a harmless SDL notice on Colab — give SDL a real dir.
+_xdg = os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
+try:
+    os.makedirs(_xdg, mode=0o700, exist_ok=True)
+except OSError:
+    pass
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)

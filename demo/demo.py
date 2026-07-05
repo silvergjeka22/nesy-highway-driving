@@ -21,6 +21,14 @@ import argparse
 # the dummy video driver if xvfb is unavailable, because highway-env draws BLANK frames
 # when it detects SDL_VIDEODRIVER=dummy.
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+# SDL/pygame print "XDG_RUNTIME_DIR not set in the environment" on Colab (no login
+# session sets it). It is a harmless notice, not the cause of a failure — give SDL a
+# real runtime dir so the message stops at the source rather than suppressing it.
+_xdg = os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
+try:
+    os.makedirs(_xdg, mode=0o700, exist_ok=True)
+except OSError:
+    pass
 if sys.platform == "linux" and not os.environ.get("DISPLAY"):
     try:
         from pyvirtualdisplay import Display
