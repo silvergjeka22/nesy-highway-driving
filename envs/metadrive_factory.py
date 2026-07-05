@@ -69,6 +69,7 @@ class VelocityActionWrapper(gym.Wrapper):
         super().__init__(env)
         self.v_max = cfg["metadrive"]["v_max"]
         self.omega_max = cfg["metadrive"]["omega_max"]
+        self.throttle_kp = float(cfg["metadrive"].get("throttle_kp", 5.0))
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
@@ -95,16 +96,17 @@ class VelocityActionWrapper(gym.Wrapper):
     def _velocity_to_native(self, v, omega):
         """Map ``(v, ω)`` to MetaDrive's ``(steering, throttle)`` in [-1, 1].
 
-        Proportional controller: steering ∝ ω, throttle ∝ (v_target − v_current).
-        MetaDrive has no direct velocity setpoint, so this closes the loop on the
-        ego's current speed each step — the same idea as a ``cmd_vel`` PID.
+        Proportional controller: steering ∝ ω, throttle ∝ kp·(v_target − v_current).
+        ``throttle_kp`` (default 5.0) scales the velocity error so one FASTER step
+        (0.2·v_max ≈ 3 m/s) gives near-full throttle — without it the car crawls
+        at throttle ≈ 0.2 and can never outrun traffic.
         """
         try:
             v_cur = float(np.linalg.norm(self.env.unwrapped.agent.velocity))
         except Exception:
             v_cur = 0.0
         steering = float(np.clip(omega / max(self.omega_max, 1e-6), -1.0, 1.0))
-        throttle = float(np.clip((v - v_cur) / max(self.v_max, 1e-6), -1.0, 1.0))
+        throttle = float(np.clip(self.throttle_kp * (v - v_cur) / max(self.v_max, 1e-6), -1.0, 1.0))
         return np.array([steering, throttle], dtype=np.float32)
 
 
