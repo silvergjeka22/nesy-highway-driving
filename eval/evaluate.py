@@ -82,7 +82,7 @@ def sanity_rollout(model, cfg, tag="model", max_steps=1000):
     speeds = []
     lane_changes = overtakes = steps = crashes = offroad = eps = 0
     obs, _ = env.reset(seed=cfg["seed"])
-    if hasattr(model, "reset_states"):     # RecurrentPPO: fresh LSTM state per episode
+    if hasattr(model, "reset_states"):     # stateful-policy hook (feed-forward: no-op)
         model.reset_states()
     prev = read_scene(env)["ego"]["lane"]
     while steps < max_steps:
@@ -126,7 +126,7 @@ def _run_episode(model, env, seed, cfg, deterministic, apply_shield,
     from nesy.roadmap import predicates, safety_shield, rule_violations
 
     obs, info = env.reset(seed=seed)
-    if hasattr(model, "reset_states"):     # RecurrentPPO: fresh LSTM state per episode
+    if hasattr(model, "reset_states"):     # stateful-policy hook (feed-forward: no-op)
         model.reset_states()
     fsm_state = cfg["fsm"]["initial_state"]
     done = False

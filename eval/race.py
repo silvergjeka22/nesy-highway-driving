@@ -124,7 +124,7 @@ def _run_race(model_a, model_b, env, seed, cfg, swap=False):
     models = {slot_b: model_b, 1 - slot_b: model_a}
 
     obs, info = env.reset(seed=seed)
-    for m in (model_a, model_b):       # RecurrentPPO facade: fresh LSTM state per race
+    for m in (model_a, model_b):       # stateful-policy hook (feed-forward: no-op)
         if hasattr(m, "reset_states"):
             m.reset_states()
     u = env.unwrapped
@@ -190,7 +190,7 @@ def record_race_video(model_a, model_b, cfg, path, seed=None):
     frames = []
     try:
         obs, _ = env.reset(seed=int(seed))
-        for m in (model_a, model_b):   # RecurrentPPO facade: fresh LSTM state
+        for m in (model_a, model_b):   # stateful-policy hook (feed-forward: no-op)
             if hasattr(m, "reset_states"):
                 m.reset_states()
         fsm_b = cfg["fsm"]["initial_state"]

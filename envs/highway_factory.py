@@ -58,7 +58,9 @@ def _ensure_render_backend():
         try:
             from pyvirtualdisplay import Display
 
-            display = Display(visible=0, size=(1400, 900))
+            # color_depth=24: pygame/SDL2 on Colab SEGFAULTS on xvfb's default 16-bit
+            # visual (the video subprocess dies with exit -11); pin a 24-bit display.
+            display = Display(visible=0, size=(1400, 900), color_depth=24)
             display.start()
             _ensure_render_backend._display = display   # keep the xvfb process alive
         except Exception:

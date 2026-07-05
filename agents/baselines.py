@@ -1,4 +1,4 @@
-"""RL trainers: the Part-1 discrete baselines (RecurrentPPO / DQN / QR-DQN) and
+"""RL trainers: the Part-1 discrete baselines (PPO / DQN / QR-DQN) and
 the logic-reward fine-tune (Part 2).
 
 Function-only. Each trainer builds one plain env from the config, seeds
@@ -14,8 +14,8 @@ import time
 
 import numpy as np
 
-from stable_baselines3 import DQN
-from sb3_contrib import RecurrentPPO, QRDQN
+from stable_baselines3 import DQN, PPO
+from sb3_contrib import QRDQN
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
@@ -23,7 +23,7 @@ from stable_baselines3.common.monitor import Monitor
 from utils import set_global_seeds, drive_path, curve_dir
 from envs.highway_factory import create_environment
 
-_ALGOS = {"rppo": RecurrentPPO, "dqn": DQN, "qrdqn": QRDQN}
+_ALGOS = {"ppo": PPO, "dqn": DQN, "qrdqn": QRDQN}
 
 
 def _monitored_env(cfg, logic_reward=False):
@@ -55,11 +55,11 @@ _ACTION_LETTERS = ("L", "I", "R", "F", "S")   # LANE_LEFT, IDLE, LANE_RIGHT, FAS
 
 
 class _EntropyDecay(BaseCallback):
-    """Linear ent_coef schedule for RecurrentPPO — the on-policy twin of DQN's ε
-    decay: explore hard early, commit late. SB3 only accepts a fixed ent_coef
-    float, so this decays ``model.ent_coef`` in place each step (a flat high
-    value keeps pushing the trained argmax toward uniform — measured: it spams
-    cancelling LANE_LEFT/RIGHT forever)."""
+    """Linear ent_coef schedule for PPO — the on-policy twin of DQN's ε decay:
+    explore hard early, commit late. SB3 only accepts a fixed ent_coef float, so
+    this decays ``model.ent_coef`` in place each step (a flat high value keeps
+    pushing the trained argmax toward uniform — measured: it spams cancelling
+    LANE_LEFT/RIGHT forever)."""
 
     def __init__(self, start, end, total_steps):
         super().__init__()
@@ -225,10 +225,10 @@ def _effective_total(total_timesteps, rollout_steps):
 # =============================================================================
 # Part 1 — the three discrete baselines on highway-env
 # =============================================================================
-def build_rppo(cfg, env, device=None):
-    """Construct the RecurrentPPO model (on-policy, PPO + LSTM) from the config."""
-    p = cfg["rppo"]
-    return RecurrentPPO(
+def build_ppo(cfg, env, device=None):
+    """Construct the PPO model (on-policy policy-gradient) from the config."""
+    p = cfg["ppo"]
+    return PPO(
         p["policy"], env,
         learning_rate=p["learning_rate"], n_steps=p["n_steps"],
         batch_size=p["batch_size"], n_epochs=p["n_epochs"],
@@ -289,14 +289,14 @@ def _train(cfg, tag, model, env, rollout_steps, path=None, extra_callbacks=()):
     return model
 
 
-def train_rppo(cfg, path=None):
-    """Train the RecurrentPPO baseline and checkpoint the best to Drive."""
+def train_ppo(cfg, path=None):
+    """Train the PPO baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
     env = _monitored_env(cfg)
-    p = cfg["rppo"]
+    p = cfg["ppo"]
     decay = _EntropyDecay(p["ent_coef"], p.get("ent_coef_final", p["ent_coef"]),
                           cfg["train"]["total_timesteps"])
-    return _train(cfg, "rppo", build_rppo(cfg, env), env, p["n_steps"], path,
+    return _train(cfg, "ppo", build_ppo(cfg, env), env, p["n_steps"], path,
                   extra_callbacks=(decay,))
 
 
@@ -317,44 +317,22 @@ def train_qrdqn(cfg, path=None):
 
 
 def load_model(path, algo):
-    """Reload a saved checkpoint. ``algo`` is ``'rppo'``, ``'dqn'`` or ``'qrdqn'``."""
+    """Reload a saved checkpoint. ``algo`` is ``'ppo'``, ``'dqn'`` or ``'qrdqn'``."""
     key = algo.lower()
     if key not in _ALGOS:
         raise ValueError(f"Unknown algo '{algo}'; expected one of {list(_ALGOS)}")
     return _ALGOS[key].load(path)
 
 
-class RecurrentPredictor:
-    """Stateful ``.predict`` facade for RecurrentPPO evaluation/demo.
-
-    A bare ``model.predict(obs)`` re-initialises the LSTM state on every call,
-    which reduces RecurrentPPO to a memoryless policy. This facade carries the
-    hidden state across steps; the shared eval/demo loops call ``reset_states()``
-    at each episode start (they check for the method with ``hasattr``, so
-    ordinary DQN/QR-DQN models pass through unchanged).
-    """
-
-    def __init__(self, model):
-        self.model = model
-        self.reset_states()
-
-    def reset_states(self):
-        self._state, self._episode_start = None, True
-
-    def predict(self, obs, deterministic=True):
-        action, self._state = self.model.predict(
-            obs, state=self._state,
-            episode_start=np.array([self._episode_start]),
-            deterministic=deterministic,
-        )
-        self._episode_start = False
-        return action, None
-
-
 def as_predictor(model, algo):
-    """Wrap a loaded model for the shared eval/demo loops: RecurrentPPO gets the
-    stateful LSTM facade, the feed-forward learners are returned as-is."""
-    return RecurrentPredictor(model) if algo.lower() == "rppo" else model
+    """Return a model ready for the shared eval/demo loops.
+
+    All three baselines (PPO, DQN, QR-DQN) are feed-forward, so a plain
+    ``model.predict(obs)`` is correct and the model is returned unchanged. Kept
+    as a seam so a future stateful policy could reintroduce a ``reset_states``
+    facade without touching the eval/demo call sites (they guard it with
+    ``hasattr``)."""
+    return model
 
 
 # =============================================================================

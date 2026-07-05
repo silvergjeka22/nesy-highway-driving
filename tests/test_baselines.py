@@ -1,8 +1,8 @@
-"""Small, fast smoke tests for the Part-1 discrete stack (RecurrentPPO / DQN / QR-DQN).
+"""Small, fast smoke tests for the Part-1 discrete stack (PPO / DQN / QR-DQN).
 
 Micro budgets only — these verify the MACHINERY (discrete env + lane-change flag,
-the three trainers end to end with checkpoint + training-curve CSV, the stateful
-RecurrentPPO facade, and the evaluation harness) in ~1-2 min on CPU. They never do
+the three trainers end to end with checkpoint + training-curve CSV, the predictor
+seam, and the evaluation harness) in ~1-2 min on CPU. They never do
 real training; the shared-budget comparison runs in the notebook on Colab.
 
 Run:  python tests/test_baselines.py        (or: pytest tests/test_baselines.py)
@@ -31,7 +31,7 @@ def micro_cfg():
     cfg["env"]["config"]["vehicles_count"] = 10
     cfg["env"]["config"]["duration"] = 15                    # 30-step episodes
     cfg["train"]["total_timesteps"] = 150
-    cfg["rppo"].update(n_steps=64, batch_size=64, n_epochs=2)
+    cfg["ppo"].update(n_steps=64, batch_size=64, n_epochs=2)
     for q in ("dqn", "qrdqn"):
         cfg[q].update(learning_starts=50, buffer_size=2000, target_update_interval=100)
     return cfg
@@ -57,14 +57,14 @@ def test_discrete_env():
     assert saw_lane_change                                    # commanded changes are counted
 
 
-def test_train_loop_rppo():
-    """train_rppo end to end (micro): best checkpoint + training-curve CSV written."""
-    from agents.baselines import train_rppo
+def test_train_loop_ppo():
+    """train_ppo end to end (micro): best checkpoint + training-curve CSV written."""
+    from agents.baselines import train_ppo
 
     cfg = micro_cfg()
-    model = train_rppo(cfg)
+    model = train_ppo(cfg)
     assert model is not None
-    _assert_artifacts(cfg, "rppo")
+    _assert_artifacts(cfg, "ppo")
 
 
 def test_train_loop_dqn():
@@ -96,16 +96,15 @@ def _assert_artifacts(cfg, tag):
 def test_exploration_wired():
     """The exploration knobs actually land in the models (fair by construction)."""
     from envs.highway_factory import create_environment
-    from agents.baselines import build_rppo, build_dqn, build_qrdqn
+    from agents.baselines import build_ppo, build_dqn, build_qrdqn
 
     cfg = micro_cfg()
     env = create_environment(cfg)
-    rppo = build_rppo(cfg, env)
+    ppo = build_ppo(cfg, env)
     dqn = build_dqn(cfg, env)
     qrdqn = build_qrdqn(cfg, env)
     env.close()
-    assert rppo.ent_coef == cfg["rppo"]["ent_coef"] > 0          # entropy pressure ON
-    assert rppo.policy.lstm_actor.hidden_size == cfg["rppo"]["policy_kwargs"]["lstm_hidden_size"]
+    assert ppo.ent_coef == cfg["ppo"]["ent_coef"] > 0            # entropy pressure ON
     for m, key in ((dqn, "dqn"), (qrdqn, "qrdqn")):              # identical ε schedules
         assert m.exploration_fraction == cfg[key]["exploration_fraction"]
         assert m.exploration_final_eps == cfg[key]["exploration_final_eps"]
@@ -113,7 +112,7 @@ def test_exploration_wired():
 
 
 def test_entropy_decay():
-    """The RecurrentPPO entropy schedule interpolates start -> end and clamps."""
+    """The PPO entropy schedule interpolates start -> end and clamps."""
     from types import SimpleNamespace
     from agents.baselines import _EntropyDecay
 
@@ -178,22 +177,19 @@ def test_crash_sprint_penalized():
     assert crashed                                               # the sprint does crash
 
 
-def test_recurrent_predictor():
-    """The stateful LSTM facade: carries hidden state, resets per episode."""
+def test_as_predictor_passthrough():
+    """as_predictor returns the feed-forward model unchanged and it still predicts."""
     from envs.highway_factory import create_environment
-    from agents.baselines import build_rppo, as_predictor
+    from agents.baselines import build_ppo, as_predictor
 
     cfg = micro_cfg()
     env = create_environment(cfg)
-    model = build_rppo(cfg, env)
-    pred = as_predictor(model, "rppo")
+    model = build_ppo(cfg, env)
+    assert as_predictor(model, "ppo") is model                        # pass-through
+    assert as_predictor(model, "dqn") is model
     obs, _ = env.reset(seed=0)
-    a1, _ = pred.predict(obs, deterministic=True)
+    a1, _ = as_predictor(model, "ppo").predict(obs, deterministic=True)
     assert int(a1) in range(5)
-    assert pred._state is not None and pred._episode_start is False   # state carried
-    pred.reset_states()
-    assert pred._state is None and pred._episode_start is True        # fresh episode
-    assert as_predictor(model, "dqn") is model                        # non-recurrent: pass-through
     env.close()
 
 

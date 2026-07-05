@@ -134,11 +134,12 @@ train:
                              # the value-based learners collapse to a trivial always-
                              # accelerate policy. Drop to 3000 only for a fast sanity check.
 
-rppo:                        # RecurrentPPO (PPO-LSTM, sb3-contrib) — on-policy. The LSTM
-                             # carries memory across steps, so the identity-swapping sorted
-                             # Kinematics rows don't reset its intent mid-overtake: it can
-                             # commit to multi-step passes.
-  policy: MlpLstmPolicy
+ppo:                         # PPO (feed-forward, stable-baselines3) — the on-policy
+                             # policy-gradient baseline. Evaluated deterministically it scores
+                             # each observation independently, so it does not drift into a
+                             # single conservative action the way the PPO-LSTM did (its LSTM
+                             # state collapsed to all-SLOWER at eval — measured: 0 overtakes).
+  policy: MlpPolicy
   learning_rate: 0.0005
   n_steps: 512               # rollout length before each update (standard for a real run)
   batch_size: 256
@@ -153,12 +154,13 @@ rppo:                        # RecurrentPPO (PPO-LSTM, sb3-contrib) — on-polic
                              # changes) and 0.05 flat was too much (the trained argmax spams
                              # LANE_LEFT/RIGHT forever — both measured at 3k). So it is SCHEDULED,
                              # like DQN's ε: linear decay from here to ent_coef_final over the run.
-  ent_coef_final: 0.01       # end-of-training entropy: explore hard early, commit late.
+  ent_coef_final: 0.02       # end-of-training entropy floor: explore hard early, commit late but
+                             # keep a little stochasticity so the deterministic policy still
+                             # attempts passes instead of collapsing to a single safe action.
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
     net_arch: [256, 256]     # same trunk as DQN/QR-DQN — comparable capacity
-    lstm_hidden_size: 128    # the memory that survives the sorted-row identity swaps
 
 dqn:                         # off-policy value-based baseline
   policy: MlpPolicy

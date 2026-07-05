@@ -16,7 +16,7 @@ from utils import curve_dir, drive_path
 
 
 # =============================================================================
-# Part 1 — training curves (RecurrentPPO vs DQN vs QR-DQN)
+# Part 1 — training curves (PPO vs DQN vs QR-DQN)
 # =============================================================================
 def load_curve(cfg, tag):
     """Load one model's training curve from SB3's ``progress.csv``.
@@ -39,7 +39,7 @@ def load_curve(cfg, tag):
     return out.dropna(subset=["t"])
 
 
-def plot_training_curves(cfg, tags=("rppo", "dqn", "qrdqn"), save=True):
+def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
     """Reward, episode length, overtakes, lane changes and crash rate vs timesteps.
 
     The overtakes panel shows the agent *learning to pass traffic*, the
