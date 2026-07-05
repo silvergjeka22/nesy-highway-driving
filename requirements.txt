@@ -4,8 +4,12 @@
 
 highway-env>=1.8.2
 gymnasium>=0.29.1
+pygame-ce>=2.5.0          # REPLACES plain pygame: the maintained fork that does NOT
+                          # segfault (exit -11) rendering highway-env offscreen on Colab's
+                          # headless xvfb. Listed here so `pip install -r requirements.txt`
+                          # installs it even when a notebook's setup cell is out of date.
 stable-baselines3>=2.3.0
-sb3-contrib>=2.3.0         # RecurrentPPO (PPO-LSTM) + QR-DQN for the Part-1 comparison
+sb3-contrib>=2.3.0         # QR-DQN for the Part-1 comparison (PPO + DQN are in stable-baselines3)
 torch>=2.1.0
 numpy>=2.0,<2.3            # match Colab's stock NumPy 2.0.x: <2.0 breaks SciPy's
                            # NumPy-2 wheels ("dtype size changed"); >=2.3 breaks the

@@ -200,7 +200,9 @@ def main():
               f"({100.0 * overtakes / max(1, steps):.1f} per 100 steps)")
         print(f"[demo] OK    {path}  ({size // 1024} KB)")
     else:
-        print(f"[demo] FAIL  {out_path}  (no file written or empty)")
+        print(f"[demo] FAIL  {out_path}  (no file written or empty — {steps} steps rendered "
+              f"0 usable frames). Most common cause on Colab: plain pygame crashing the "
+              f"renderer. Fix: `pip uninstall -y pygame && pip install pygame-ce`, then rerun.")
         sys.exit(1)
 
 
