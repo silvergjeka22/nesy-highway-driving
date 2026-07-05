@@ -31,18 +31,13 @@ except OSError:
 # panda3d's 3D engine defaults to GLX, which needs an X display. On headless Colab
 # there is none → segfault. Fix: switch panda3d to EGL (renders directly on the GPU,
 # no X needed). This MUST happen before MetaDrive creates the panda3d engine.
-if not os.environ.get("DISPLAY"):
-    try:
-        from panda3d.core import loadPrcFileData
-        loadPrcFileData("", "load-display p3headlessgl")
-        print("[demo] configured panda3d for headless EGL rendering (no X display)")
-    except Exception:
-        try:
-            from pyvirtualdisplay import Display
-            Display(visible=0, size=(800, 800), color_depth=24).start()
-            print("[demo] xvfb fallback for 3D rendering")
-        except Exception:
-            pass
+# Always set it — even if DISPLAY is set (a stale xvfb doesn't support GL).
+try:
+    from panda3d.core import loadPrcFileData
+    loadPrcFileData("", "load-display p3headlessgl")
+    print("[demo] configured panda3d for headless EGL rendering")
+except Exception:
+    pass
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
