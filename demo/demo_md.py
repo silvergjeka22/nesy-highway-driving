@@ -3,10 +3,11 @@
 Runs OUTSIDE the notebook kernel and renders offscreen, so it never touches the
 kernel. The driver is a **discrete Part-1/Part-2 model run through the Lab-1 bridge**
 (reconstructed highway obs -> manoeuvre -> (v,ω)); ``--shield`` adds the FSM shield +
-CBF/VO filter on top. Two views:
+CBF/VO filter on top.
 
-  * ``--view 3d`` (default) — MetaDrive's **3D chase camera** (needs a GPU runtime);
-  * ``--view topdown`` (or the auto-fallback) — the CPU pygame top-down view.
+Uses the **top-down pygame view** (offscreen, CPU). MetaDrive's panda3d 3D engine
+cannot render on Colab — every backend segfaults (GLX, EGL, p3tinydisplay is pink).
+The top-down view shows road, cars, overtakes, plus a live telemetry overlay.
 
 Plays episodes until the clip is >= ``--seconds``, prints the overtakes per episode
 (the proof it passes traffic), encodes H.264, prints ``[demo] OK/FAIL``.
@@ -17,45 +18,14 @@ Plays episodes until the clip is >= ``--seconds``, prints the overtakes per epis
 import os
 import sys
 import argparse
-import traceback
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # offscreen rendering, no display needed
-# "XDG_RUNTIME_DIR not set" is a harmless SDL notice on Colab — give SDL a real dir.
 _xdg = os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
 try:
     os.makedirs(_xdg, mode=0o700, exist_ok=True)
 except OSError:
     pass
-
-# Headless 3D rendering: panda3d needs a GLX display. On Colab (GPU or CPU):
-#   - NVIDIA's GLX segfaults (no indirect rendering support on T4)
-#   - EGL (p3headlessgl) segfaults (T4 driver bug in panda3d)
-#   - p3tinydisplay works but shows all-pink (can't load textures)
-# Solution: ALWAYS force Mesa software OpenGL (LIBGL_ALWAYS_SOFTWARE=1) and
-# start our own Xvfb — even when DISPLAY is already set, because Colab's GPU
-# runtime sets DISPLAY but has no real X server behind it.
-os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
-import shutil
-import subprocess as _sp
-_xvfb_bin = shutil.which("Xvfb")
-if _xvfb_bin:
-    _xvfb_proc = _sp.Popen(
-        [_xvfb_bin, ":99", "-screen", "0", "800x800x24", "+extension", "GLX"],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-    import time
-    time.sleep(0.5)
-    os.environ["DISPLAY"] = ":99"
-    import atexit
-    atexit.register(_xvfb_proc.kill)
-    print("[demo] started Xvfb :99 + Mesa software GL for headless 3D")
-else:
-    try:
-        from panda3d.core import loadPrcFileData
-        loadPrcFileData("", "load-display p3tinydisplay")
-        print("[demo] WARNING: no Xvfb — using p3tinydisplay (frames may be pink)")
-    except Exception:
-        pass
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
@@ -65,7 +35,7 @@ import numpy as np  # noqa: E402
 from utils import load_config, save_mp4  # noqa: E402
 from agents.baselines import load_model  # noqa: E402
 from envs.metadrive_factory import (  # noqa: E402
-    make_env_md, nesy_md_action, count_passes_md, read_scene_md, VelocityActionWrapper,
+    make_env_md, nesy_md_action, count_passes_md, read_scene_md,
 )
 
 
@@ -96,39 +66,8 @@ def draw_telemetry(frame, v, omega, fsm_state=None):
     return np.asarray(img)
 
 
-def _build_3d_env(cfg, seed):
-    """A MetaDrive env with a dedicated ``RGBCamera`` sensor for the 3D video.
-
-    An explicit ``RGBCamera(width, height)`` renders into its own exact-size
-    framebuffer — unlike ``main_camera``, whose buffer follows the OS window and
-    can come back a few pixels short (784×800 vs the declared 800×800), crashing
-    MetaDrive's image observation. Frames are grabbed straight from the sensor
-    with a chase-view pose (see ``record_3d``), so the video works wherever the
-    3D engine does (GPU/EGL on headless Linux).
-    """
-    from metadrive.envs import MetaDriveEnv
-    from metadrive.component.sensors.rgb_camera import RGBCamera
-
-    md = cfg["metadrive"]
-    w, h = md.get("video_size", [800, 800])
-    md_config = {
-        "use_render": False, "image_observation": True,   # offscreen 3D engine
-        "sensors": {"rgb_camera": (RGBCamera, w, h)},
-        "vehicle_config": {"image_source": "rgb_camera",
-                           "lidar": {"num_lasers": md.get("lidar_num_lasers", 72)}},
-        "norm_pixel": False, "stack_size": 1,
-        "traffic_density": md["traffic_density"], "num_scenarios": md["num_scenarios"],
-        "start_seed": int(seed), "horizon": md["horizon"], "map": md["map"],
-    }
-    return VelocityActionWrapper(MetaDriveEnv(md_config), cfg)
-
-
 def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
-    """Shared loop: bridge-drive ``env``, grab one frame per step, print overtakes.
-
-    Returns the saved MP4 path. ``grab_frame(env, obs)`` supplies the pixels, so
-    the 3D and top-down recorders differ only in env construction + frame source.
-    """
+    """Drive ``env``, grab one frame per step via ``grab_frame(env, obs)``, print overtakes."""
     target = int(min_seconds * fps)
     seed0 = int(cfg["eval_seeds"][0])
     frames = []
@@ -168,26 +107,8 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
     return save_mp4(frames, out_path, fps=fps)
 
 
-def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
-    """Record the 3D chase-camera view (offscreen; needs a GPU/EGL runtime)."""
-    md = cfg["metadrive"]
-    env = _build_3d_env(cfg, int(cfg["eval_seeds"][0]))
-
-    def grab(env, obs):
-        # Borrow the camera for a chase shot behind/above the ego (panda3d:
-        # x right, y forward, z up; hpr in degrees). perceive() restores the
-        # camera afterwards. The sensor returns BGR -> flip to RGB.
-        u = env.unwrapped
-        cam = u.engine.get_sensor("rgb_camera")
-        bgr = cam.perceive(to_float=False, new_parent_node=u.agent.origin,
-                           position=(0.0, -7.5, 3.0), hpr=(0.0, -12.0, 0.0))
-        return np.asarray(bgr, dtype=np.uint8)[..., ::-1]
-
-    return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
-
-
 def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
-    """Record the CPU pygame top-down view (offscreen; runs anywhere)."""
+    """Record the top-down pygame view (offscreen, CPU). Runs on any runtime."""
     md = cfg["metadrive"]
     size = tuple(md.get("video_size", [800, 800]))
     env = make_env_md(cfg, render=True, seed=int(cfg["eval_seeds"][0]))
@@ -199,39 +120,10 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
     return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
 
 
-def _has_gpu():
-    """True only if a CUDA/EGL GPU device is actually present.
-
-    The 3D chase camera needs one; without it MetaDrive's 3D engine can SEGFAULT
-    the whole process (an uncatchable crash that skips the top-down fallback), so
-    on a CPU runtime we must NOT even attempt 3D.
-
-    ``torch.cuda.is_available()`` returns True on condacolab (CUDA toolkit installed,
-    no device), so we also require ``device_count() > 0``. Similarly ``nvidia-smi``
-    can be on PATH without a GPU — we run it and check the exit code.
-    """
-    try:
-        import torch
-        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-            return True
-    except Exception:
-        pass
-    import shutil
-    import subprocess as _sp
-    if shutil.which("nvidia-smi"):
-        try:
-            return _sp.run(["nvidia-smi"], capture_output=True, timeout=5).returncode == 0
-        except Exception:
-            pass
-    return False
-
-
 def main():
-    ap = argparse.ArgumentParser(description="Record a MetaDrive driving video (discrete model via the Lab-1 bridge).")
+    ap = argparse.ArgumentParser(description="Record a MetaDrive top-down driving video (discrete model via the Lab-1 bridge).")
     ap.add_argument("--model", required=True, help="a discrete Part-1/Part-2 checkpoint (e.g. dqn.zip, part2_nesy.zip)")
     ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn"], help="algorithm of the checkpoint")
-    ap.add_argument("--view", default="auto", choices=["auto", "3d", "topdown"],
-                    help="auto = 3d chase camera only if a GPU is present, else cpu top-down (default: auto)")
     ap.add_argument("--no-shield", action="store_true",
                     help="drive WITHOUT the FSM shield + CBF/VO filter (default: shield on)")
     ap.add_argument("--out", default=None, help="output .mp4 path (default: alongside the model)")
@@ -245,34 +137,17 @@ def main():
     shield = not args.no_shield
     out_path = args.out or (os.path.splitext(args.model)[0] + "_metadrive.mp4")
 
-    view = args.view
-    if view == "auto":
-        view = "3d" if _has_gpu() else "topdown"
-        print(f"[demo] auto view -> {view} ({'GPU present' if view == '3d' else 'no GPU: CPU top-down'})")
-
     print(f"loading {args.algo} model (Lab-1 bridge driver): {args.model}")
     model = load_model(args.model, args.algo)
-    print(f"recording >= {min_seconds:.0f}s (view={view}, shield={shield}) -> {out_path}")
+    print(f"recording >= {min_seconds:.0f}s (view=topdown, shield={shield}) -> {out_path}")
 
-    path = None
-    if view == "3d":
-        try:
-            path = record_3d(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
-        except Exception:   # 3D renderer unavailable (e.g. CPU runtime) -> top-down
-            print("[demo] 3D render failed — full traceback (fix or use a GPU runtime):")
-            traceback.print_exc()
-            print("[demo] falling back to the CPU top-down view.")
-            path = None
-    if path is None:
-        path = record_topdown(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
+    path = record_topdown(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
         print(f"[demo] OK    {path}  ({size // 1024} KB)")
     else:
-        print(f"[demo] FAIL  {out_path}  (no file written or empty). The top-down "
-              f"recorder produced no frames — check the traceback above; on a CPU "
-              f"runtime the 3D view is skipped automatically.")
+        print(f"[demo] FAIL  {out_path}  (no file written or empty)")
         sys.exit(1)
 
 
