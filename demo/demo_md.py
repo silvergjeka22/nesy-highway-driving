@@ -20,6 +20,7 @@ import argparse
 import traceback
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # offscreen rendering, no display needed
 # "XDG_RUNTIME_DIR not set" is a harmless SDL notice on Colab — give SDL a real dir.
 _xdg = os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
 try:
@@ -170,20 +171,30 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
 
 
 def _has_gpu():
-    """True only if a CUDA/EGL GPU is actually present.
+    """True only if a CUDA/EGL GPU device is actually present.
 
     The 3D chase camera needs one; without it MetaDrive's 3D engine can SEGFAULT
     the whole process (an uncatchable crash that skips the top-down fallback), so
     on a CPU runtime we must NOT even attempt 3D.
+
+    ``torch.cuda.is_available()`` returns True on condacolab (CUDA toolkit installed,
+    no device), so we also require ``device_count() > 0``. Similarly ``nvidia-smi``
+    can be on PATH without a GPU — we run it and check the exit code.
     """
     try:
         import torch
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             return True
     except Exception:
         pass
     import shutil
-    return shutil.which("nvidia-smi") is not None
+    import subprocess as _sp
+    if shutil.which("nvidia-smi"):
+        try:
+            return _sp.run(["nvidia-smi"], capture_output=True, timeout=5).returncode == 0
+        except Exception:
+            pass
+    return False
 
 
 def main():
