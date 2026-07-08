@@ -19,9 +19,6 @@ Plays episodes until the clip is >= ``--seconds``, prints the overtakes per epis
 import os
 import sys
 import argparse
-import faulthandler
-
-faulthandler.enable()
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # offscreen rendering, no display needed
@@ -41,6 +38,27 @@ from agents.baselines import load_model  # noqa: E402
 from envs.metadrive_factory import (  # noqa: E402
     make_env_md, nesy_md_action, count_passes_md, read_scene_md,
 )
+
+# torch compiled against numpy 1.x can't convert numpy 2.x arrays directly.
+# Patch th.as_tensor to fall back to Python-list conversion when this happens.
+import torch as _th  # noqa: E402
+_orig_as_tensor = _th.as_tensor
+def _as_tensor_compat(data, dtype=None, device=None):
+    try:
+        return _orig_as_tensor(data, dtype=dtype, device=device)
+    except RuntimeError:
+        if hasattr(data, "tolist"):
+            return _orig_as_tensor(data.tolist(), dtype=dtype, device=device)
+        raise
+_th.as_tensor = _as_tensor_compat
+
+_orig_tensor_numpy = _th.Tensor.numpy
+def _tensor_numpy_compat(self, *args, **kwargs):
+    try:
+        return _orig_tensor_numpy(self, *args, **kwargs)
+    except RuntimeError:
+        return np.asarray(self.detach().cpu().tolist())
+_th.Tensor.numpy = _tensor_numpy_compat
 
 
 def draw_telemetry(frame, v, omega, fsm_state=None):
