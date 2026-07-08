@@ -16,7 +16,7 @@ import numpy as np
 import gymnasium as gym
 
 
-def make_env_md(cfg, render=False, seed=None):
+def make_env_md(cfg, render=False, seed=None, video_3d=False):
     """Build a MetaDrive env exposing a continuous ``(v, ω)`` action.
 
     Args:
@@ -25,6 +25,8 @@ def make_env_md(cfg, render=False, seed=None):
             top-down video (``demo/demo_md.py``) renders offscreen regardless, so
             the observation is identical whether or not this is set.
         seed: start scenario seed (MetaDrive uses integer scenario seeds).
+        video_3d: enable the offscreen 3D rendering pipeline (chase-camera frames
+            via panda3d's offscreen buffer). The policy still uses vector obs.
 
     Returns:
         A Gymnasium env whose action is ``(v_norm, ω_norm) ∈ [-1, 1]²``.
@@ -38,16 +40,30 @@ def make_env_md(cfg, render=False, seed=None):
             "Python-3.10 (condacolab) runtime: `pip install metadrive-simulator`."
         ) from e
 
+    veh_cfg = {"lidar": {"num_lasers": md.get("lidar_num_lasers", 72)}}
+
     md_config = {
-        "use_render": False,                 # no 3D popup / GPU — CPU state+lidar obs
-        "image_observation": False,          # vector observation (MLP-friendly, CPU)
+        "use_render": False,
+        "image_observation": video_3d,
         "traffic_density": md["traffic_density"],
         "num_scenarios": md["num_scenarios"],
         "start_seed": int(seed) if seed is not None else cfg["seed"],
         "horizon": md["horizon"],
         "map": md["map"],
-        "vehicle_config": {"lidar": {"num_lasers": md.get("lidar_num_lasers", 72)}},
+        "vehicle_config": veh_cfg,
     }
+
+    if video_3d:
+        size = tuple(md.get("video_size", [800, 800]))
+        veh_cfg["image_source"] = "main_camera"
+        md_config.update({
+            "window_size": size,
+            "norm_pixel": False,
+            "stack_size": 1,
+            "camera_dist": 7.5,
+            "camera_height": 3.5,
+            "camera_smooth": True,
+        })
 
     env = MetaDriveEnv(md_config)
     env = VelocityActionWrapper(env, cfg)

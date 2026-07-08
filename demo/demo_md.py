@@ -5,14 +5,15 @@ kernel. The driver is a **discrete Part-1/Part-2 model run through the Lab-1 bri
 (reconstructed highway obs -> manoeuvre -> (v,ω)); ``--shield`` adds the FSM shield +
 CBF/VO filter on top.
 
-Uses the **top-down pygame view** (offscreen, CPU). MetaDrive's panda3d 3D engine
-cannot render on Colab — every backend segfaults (GLX, EGL, p3tinydisplay is pink).
-The top-down view shows road, cars, overtakes, plus a live telemetry overlay.
+Two views:
+  * ``--view 3d``      — 3D chase-camera via panda3d offscreen rendering (GPU runtime).
+  * ``--view topdown``  — top-down pygame view (CPU, works everywhere).
 
 Plays episodes until the clip is >= ``--seconds``, prints the overtakes per episode
 (the proof it passes traffic), encodes H.264, prints ``[demo] OK/FAIL``.
 
     python demo/demo_md.py --model <Drive>/checkpoints/dqn.zip --algo dqn --shield
+    python demo/demo_md.py --model <ckpt> --algo dqn --view 3d
 """
 
 import os
@@ -120,12 +121,40 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
     return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
 
 
+def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
+    """Record a 3D chase-camera video via MetaDrive's offscreen rendering pipeline."""
+    md = cfg["metadrive"]
+    env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
+
+    def grab(env, obs):
+        if isinstance(obs, dict) and "image" in obs:
+            img = obs["image"]
+            if img.ndim == 4:
+                img = img[..., -1]
+            img = np.asarray(img)
+            if img.dtype != np.uint8:
+                img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+            if img.ndim == 3 and img.shape[2] > 3:
+                img = img[:, :, :3]
+            return img
+        try:
+            cam = env.unwrapped.engine.get_sensor("main_camera")
+            img = cam.perceive(to_float=False)
+            return np.asarray(img, dtype=np.uint8)[:, :, :3]
+        except Exception:
+            return None
+
+    return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Record a MetaDrive top-down driving video (discrete model via the Lab-1 bridge).")
+    ap = argparse.ArgumentParser(description="Record a MetaDrive driving video (discrete model via the Lab-1 bridge).")
     ap.add_argument("--model", required=True, help="a discrete Part-1/Part-2 checkpoint (e.g. dqn.zip, part2_nesy.zip)")
     ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn"], help="algorithm of the checkpoint")
     ap.add_argument("--no-shield", action="store_true",
                     help="drive WITHOUT the FSM shield + CBF/VO filter (default: shield on)")
+    ap.add_argument("--view", default="topdown", choices=["topdown", "3d"],
+                    help="3d = chase-camera via offscreen panda3d; topdown = 2D pygame (default)")
     ap.add_argument("--out", default=None, help="output .mp4 path (default: alongside the model)")
     ap.add_argument("--config", default="configs/highway.yaml", help="config YAML")
     ap.add_argument("--seconds", type=float, default=None, help="min length (default: metadrive.video_seconds)")
@@ -139,9 +168,12 @@ def main():
 
     print(f"loading {args.algo} model (Lab-1 bridge driver): {args.model}")
     model = load_model(args.model, args.algo)
-    print(f"recording >= {min_seconds:.0f}s (view=topdown, shield={shield}) -> {out_path}")
+    print(f"recording >= {min_seconds:.0f}s (view={args.view}, shield={shield}) -> {out_path}")
 
-    path = record_topdown(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
+    if args.view == "3d":
+        path = record_3d(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
+    else:
+        path = record_topdown(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
