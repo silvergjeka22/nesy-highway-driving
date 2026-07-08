@@ -123,6 +123,15 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
 
 def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
     """Record a 3D chase-camera video via MetaDrive's offscreen rendering pipeline."""
+    # EGL (p3headlessgl) renders on the GPU without needing an X display.
+    # If unavailable, GLX is used — caller must provide xvfb-run.
+    try:
+        from panda3d.core import loadPrcFileData
+        loadPrcFileData("", "load-display p3headlessgl")
+        print("[3d] panda3d: using EGL (p3headlessgl)", flush=True)
+    except Exception:
+        print("[3d] panda3d: EGL unavailable, falling back to GLX", flush=True)
+
     md = cfg["metadrive"]
     env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
 
