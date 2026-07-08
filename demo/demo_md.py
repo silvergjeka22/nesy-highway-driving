@@ -19,6 +19,9 @@ Plays episodes until the clip is >= ``--seconds``, prints the overtakes per epis
 import os
 import sys
 import argparse
+import faulthandler
+
+faulthandler.enable()
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # offscreen rendering, no display needed
