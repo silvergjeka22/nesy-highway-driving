@@ -54,15 +54,13 @@ def make_env_md(cfg, render=False, seed=None, video_3d=False):
     }
 
     if video_3d:
+        from metadrive.component.sensors.rgb_camera import RGBCamera
         size = tuple(md.get("video_size", [800, 800]))
-        veh_cfg["image_source"] = "main_camera"
+        veh_cfg["image_source"] = "rgb_camera"
         md_config.update({
-            "window_size": size,
+            "sensors": {"rgb_camera": (RGBCamera, size[0], size[1])},
             "norm_pixel": False,
             "stack_size": 1,
-            "camera_dist": 7.5,
-            "camera_height": 3.5,
-            "camera_smooth": True,
         })
 
     env = MetaDriveEnv(md_config)

@@ -127,21 +127,23 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
     env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
 
     def grab(env, obs):
-        if isinstance(obs, dict) and "image" in obs:
-            img = obs["image"]
-            if img.ndim == 4:
-                img = img[..., -1]
-            img = np.asarray(img)
-            if img.dtype != np.uint8:
-                img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+        try:
+            agent = env.unwrapped.agent
+            cam = env.unwrapped.engine.get_sensor("rgb_camera")
+            img = cam.perceive(
+                to_float=False,
+                new_parent_node=agent.origin,
+                position=(0, -7.5, 3.5),
+                hpr=(0, -15, 0),
+            )
+            img = np.asarray(img, dtype=np.uint8)
             if img.ndim == 3 and img.shape[2] > 3:
                 img = img[:, :, :3]
+            if img.ndim == 3 and img.shape[2] == 3:
+                img = img[..., ::-1]
             return img
-        try:
-            cam = env.unwrapped.engine.get_sensor("main_camera")
-            img = cam.perceive(to_float=False)
-            return np.asarray(img, dtype=np.uint8)[:, :, :3]
-        except Exception:
+        except Exception as e:
+            print(f"[3d] frame grab failed: {e}", flush=True)
             return None
 
     return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
