@@ -2,12 +2,11 @@ import os
 import sys
 
 # Block pkg_resources before gymnasium imports highway_env -> pygame,
-# preventing the DeprecationWarning at source.
 sys.modules.setdefault("pkg_resources", None)
 
 import numpy as np
 import gymnasium as gym
-import highway_env  # noqa: F401
+import highway_env 
 
 
 def ensure_render_backend():

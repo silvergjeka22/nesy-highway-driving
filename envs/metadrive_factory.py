@@ -1,15 +1,6 @@
-"""MetaDrive construction with a velocity ``(v, ω)`` action (Part 3).
+"""MetaDrive env with a continuous (v, ω) action (Part 3).
 
-Public functions:
-  * ``make_env_md(cfg, render, seed)`` — a MetaDrive env whose action is a
-    continuous, normalised ``(v, ω)`` mapped onto ROS-style ``cmd_vel`` (Lab 1).
-  * ``read_scene_md(env)`` — the SAME SI scene schema as ``highway_factory.read_scene``,
-    so the NeSy predicates / shield / CBF are reused unchanged.
-
-MetaDrive (0.4.x, gymnasium-native, CPU) is heavy and only installed in the Part-3
-notebook, so it is imported lazily inside the functions. Nothing runs at import
-time. Warnings are fixed at the source in the notebook setup (legacy ``gym``
-removed, ``pygame-ce`` for pkg_resources), not suppressed here.
+Lazy imports — MetaDrive is only installed in the Part-3 notebook.
 """
 
 import numpy as np
@@ -17,20 +8,7 @@ import gymnasium as gym
 
 
 def make_env_md(cfg, render=False, seed=None, video_3d=False):
-    """Build a MetaDrive env exposing a continuous ``(v, ω)`` action.
-
-    Args:
-        cfg: full config; uses the ``metadrive:`` block.
-        render: kept for API symmetry with the highway factory — MetaDrive's
-            top-down video (``demo/demo_md.py``) renders offscreen regardless, so
-            the observation is identical whether or not this is set.
-        seed: start scenario seed (MetaDrive uses integer scenario seeds).
-        video_3d: enable the offscreen 3D rendering pipeline (chase-camera frames
-            via panda3d's offscreen buffer). The policy still uses vector obs.
-
-    Returns:
-        A Gymnasium env whose action is ``(v_norm, ω_norm) ∈ [-1, 1]²``.
-    """
+    """Build a MetaDrive env with a normalised (v, ω) action space."""
     md = cfg["metadrive"]
     try:
         from metadrive.envs import MetaDriveEnv
@@ -71,13 +49,7 @@ def make_env_md(cfg, render=False, seed=None, video_3d=False):
 
 
 class VelocityActionWrapper(gym.Wrapper):
-    """Expose a normalised ``(v, ω)`` action and convert it to MetaDrive control.
-
-    The policy (and the manoeuvre→``cmd_vel`` translation in Lab 1) act in velocity
-    space; this wrapper turns ``(v_norm, ω_norm) ∈ [-1,1]²`` into MetaDrive's native
-    ``(steering, throttle)`` via a proportional velocity controller — the software
-    twin of a robot's ``cmd_vel`` low-level controller.
-    """
+    """Convert normalised (v, ω) to MetaDrive's (steering, throttle) via a P-controller."""
 
     def __init__(self, env, cfg):
         super().__init__(env)
@@ -87,10 +59,7 @@ class VelocityActionWrapper(gym.Wrapper):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
-        # MetaDrive's BaseEnv.reset() takes only `seed` (no gymnasium `options`), and
-        # that seed is a *scenario index* that must lie in
-        # ``[start_seed, start_seed + num_scenarios)``. The eval harness passes
-        # arbitrary gym-style seeds, so wrap any out-of-range seed into that window.
+        # Wrap arbitrary gym-style seeds into MetaDrive's [start_seed, start_seed+num_scenarios) window.
         if seed is not None:
             try:
                 start = int(self.env.config["start_seed"])
@@ -108,13 +77,7 @@ class VelocityActionWrapper(gym.Wrapper):
         return self.env.step(self._velocity_to_native(v_cmd, omega_cmd))
 
     def _velocity_to_native(self, v, omega):
-        """Map ``(v, ω)`` to MetaDrive's ``(steering, throttle)`` in [-1, 1].
-
-        Proportional controller: steering ∝ ω, throttle ∝ kp·(v_target − v_current).
-        ``throttle_kp`` (default 5.0) scales the velocity error so one FASTER step
-        (0.2·v_max ≈ 3 m/s) gives near-full throttle — without it the car crawls
-        at throttle ≈ 0.2 and can never outrun traffic.
-        """
+        """Map (v, ω) to MetaDrive's (steering, throttle) via proportional control."""
         try:
             v_cur = float(np.linalg.norm(self.env.unwrapped.agent.velocity))
         except Exception:
@@ -127,25 +90,15 @@ class VelocityActionWrapper(gym.Wrapper):
 def kin_obs_from_scene(scene, cfg):
     """Reconstruct highway-env's Kinematics observation from an SI scene dict.
 
-    Lets the **discrete Part-2 policy** (trained on highway-env) run on MetaDrive: it
-    mirrors ``highway_env.KinematicObservation`` — features ``[presence,x,y,vx,vy]``,
-    the ego row absolute, up to ``vehicles_count-1`` nearest neighbours ego-relative and
-    distance-sorted, each feature mapped to [-1,1] by highway-env's ranges (MAX_SPEED=40)
-    and clipped, then zero-padded to ``vehicles_count`` rows.
-
-    Pure function (scene -> ``(vehicles_count, n_features)`` array) so it is unit-testable
-    without MetaDrive. **Scale correction**: highway-env's speed scale (~25 m/s) differs
-    from MetaDrive's robot scale (~5 m/s), so without help the ego-speed feature reads ~4×
-    lower than the model ever saw — it thinks it is crawling and never commits to a pass.
-    ``metadrive.obs_speed_scale`` multiplies the velocity features back up into the policy's
-    trained range, so it drives (and overtakes) the way it learned to on highway-env.
+    Lets the Part-2 discrete policy run on MetaDrive by mirroring the highway-env
+    observation format. obs_speed_scale corrects the MetaDrive->highway speed gap.
     """
     oc = cfg["env"]["config"]["observation"]
     feats = oc.get("features", ["presence", "x", "y", "vx", "vy"])
     n = oc.get("vehicles_count", 5)
-    max_v = 40.0                                   # highway_env Vehicle.MAX_SPEED
+    max_v = 40.0
     lanes = cfg["env"]["config"].get("lanes_count", 4)
-    vscale = float(cfg.get("metadrive", {}).get("obs_speed_scale", 1.0))   # robot -> highway speed
+    vscale = float(cfg.get("metadrive", {}).get("obs_speed_scale", 1.0))
     rng = {"x": (-5 * max_v, 5 * max_v), "y": (-4.0 * lanes, 4.0 * lanes),
            "vx": (-2 * max_v, 2 * max_v), "vy": (-2 * max_v, 2 * max_v)}
 
@@ -177,13 +130,7 @@ def read_kin_obs_md(env, cfg):
 
 
 def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
-    """One Lab-1-bridge step: run the Part-2 model on MetaDrive and return its command.
-
-    Reconstruct the highway obs (``read_kin_obs_md``) -> the Part-2 discrete model picks
-    a manoeuvre -> [optional FSM shield] -> Lab-1 ``manoeuvre_to_cmd_vel`` -> ``(v, ω)`` ->
-    [optional CBF/VO continuous filter] -> normalised MetaDrive action. Shared by the
-    Part-3 eval (``eval.evaluate_nesy_md``) and the video demo. Returns ``(action, fsm_state)``.
-    """
+    """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge. Returns (action, fsm_state)."""
     from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS
     from labs.lab1_cmd_vel import manoeuvre_to_cmd_vel
 
@@ -191,22 +138,18 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
                                deterministic=cfg["eval"].get("deterministic", True))
     scene = read_scene_md(env)
     manoeuvre = ACTIONS[int(a)]
-    if shield:                                       # discrete FSM shield (Part 2)
+    if shield:
         idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
         manoeuvre = ACTIONS[idx]
-    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)   # Lab 1: manoeuvre -> (v, ω)
-    if shield:                                       # continuous CBF/VO filter (Labs 4/5)
+    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
+    if shield:
         (v, omega), _ = continuous_shield(v, omega, scene, cfg)
     md = cfg["metadrive"]
     return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
 
 
 def read_scene_md(env):
-    """Extract the common SI scene dict from a MetaDrive env.
-
-    Returns the same schema as ``envs.highway_factory.read_scene`` (ego + others in
-    metres / m/s, lane as int), so the NeSy predicates / shield / CBF apply unchanged.
-    """
+    """Extract the SI scene dict from a MetaDrive env (same schema as highway read_scene)."""
     u = env.unwrapped
     ego = getattr(u, "agent", None) or u.vehicle
 
@@ -244,18 +187,12 @@ def _neighbours(u, ego):
         from metadrive.component.vehicle.base_vehicle import BaseVehicle
         return [o for o in objs if o is not ego and isinstance(o, BaseVehicle)]
     except Exception:
-        # Fallback: keep objects that quack like a vehicle (have a lane_index).
         return [o for o in objs if o is not ego and hasattr(o, "lane_index")
                 and hasattr(o, "velocity")]
 
 
 def count_passes_md(env, ahead_ids):
-    """Overtake tracking on MetaDrive: vehicles that move from ahead of the ego
-    to behind it along the road (+x on the straight ``SSSS`` map) count once.
-
-    Returns ``(passed_this_step, new_ahead_ids)`` — same bookkeeping as the
-    highway ``OvertakeCounter``, keyed by MetaDrive object names.
-    """
+    """Count vehicles that moved from ahead to behind the ego. Returns (passed, new_ahead_ids)."""
     u = env.unwrapped
     ego = u.agent
     ex = float(ego.position[0])

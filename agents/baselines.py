@@ -135,8 +135,7 @@ def effective_total(total_timesteps, rollout_steps):
     return math.ceil(total_timesteps / rollout_steps) * rollout_steps
 
 
-# ---- Build models -----------------------------------------------------------
-
+# Build models
 def build_ppo(cfg, env, device=None):
     """Build a PPO model from config (no training)."""
     p = cfg["ppo"]
@@ -174,8 +173,7 @@ def build_qrdqn(cfg, env, device=None):
     return build_q_learner(QRDQN, cfg["qrdqn"], cfg, env, device)
 
 
-# ---- Training ---------------------------------------------------------------
-
+# Training
 def train_model(cfg, tag, model, env, rollout_steps, path=None, extra_callbacks=()):
     """Train a model, save the best checkpoint by reward, and log to CSV."""
     attach_logger(model, cfg, tag)
@@ -232,7 +230,7 @@ def load_model(path, algo):
     return ALGOS[key].load(path)
 
 
-# ---- Part 2: logic-shaped reward fine-tune ----------------------------------
+# Part 2: logic-shaped reward fine-tune
 
 def to_device(model, cfg):
     """Move an SB3 model to the configured device (cpu or cuda)."""
