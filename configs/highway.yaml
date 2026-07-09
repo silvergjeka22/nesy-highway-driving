@@ -64,15 +64,15 @@ train:
 
 ppo:
   policy: MlpPolicy
-  learning_rate: 0.0005
-  n_steps: 512
-  batch_size: 256
+  learning_rate: 0.0003
+  n_steps: 256
+  batch_size: 64
   n_epochs: 10
   gamma: 0.98
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.05              # start of linear decay
-  ent_coef_final: 0.02        # end of linear decay
+  ent_coef: 0.10              # start of linear decay — high to force lane-change exploration
+  ent_coef_final: 0.04        # end of linear decay — still substantial at end of training
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
