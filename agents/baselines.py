@@ -1,14 +1,3 @@
-"""RL trainers: the Part-1 discrete baselines (PPO / DQN / QR-DQN) and
-the logic-reward fine-tune (Part 2).
-
-Function-only. Each trainer builds one plain env from the config, seeds
-everything, trains a stable-baselines3 / sb3-contrib model on the resolved
-device (CPU or GPU), saves the best-by-reward checkpoint, and returns the
-model. All three read the SAME ``train.total_timesteps`` budget — one config
-number switches the whole comparison. No top-level execution — the notebooks
-orchestrate.
-"""
-
 import math
 import time
 
@@ -23,23 +12,15 @@ from stable_baselines3.common.monitor import Monitor
 from utils import set_global_seeds, drive_path, curve_dir
 from envs.highway_factory import create_environment
 
-_ALGOS = {"ppo": PPO, "dqn": DQN, "qrdqn": QRDQN}
+ALGOS = {"ppo": PPO, "dqn": DQN, "qrdqn": QRDQN}
 
 
-def _monitored_env(cfg, logic_reward=False):
-    """One training env, wrapped so each finished episode also records its
-    overtake count and crash flag — that is what lets the progress prints and
-    the training curves show cars-passed-over-time, not just reward."""
+def monitored_env(cfg, logic_reward=False):
     env = create_environment(cfg, seed=cfg["seed"], logic_reward=logic_reward)
     return Monitor(env, info_keywords=("overtakes", "crashed", "lane_changes"))
 
 
 def resolve_device(cfg):
-    """Return 'cuda' or 'cpu' so training works on both GPU and CPU machines.
-
-    ``cfg['device']`` may be ``auto``/``cuda``/``gpu`` (use the GPU when present,
-    else fall back to CPU) or ``cpu`` (force CPU).
-    """
     want = str(cfg.get("device", "auto")).lower()
     if want == "cpu":
         return "cpu"
@@ -51,16 +32,7 @@ def resolve_device(cfg):
     return "cuda" if has_cuda else "cpu"
 
 
-_ACTION_LETTERS = ("L", "I", "R", "F", "S")   # LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER
-
-
-class _EntropyDecay(BaseCallback):
-    """Linear ent_coef schedule for PPO — the on-policy twin of DQN's ε decay:
-    explore hard early, commit late. SB3 only accepts a fixed ent_coef float, so
-    this decays ``model.ent_coef`` in place each step (a flat high value keeps
-    pushing the trained argmax toward uniform — measured: it spams cancelling
-    LANE_LEFT/RIGHT forever)."""
-
+class EntropyDecay(BaseCallback):
     def __init__(self, start, end, total_steps):
         super().__init__()
         self.start = float(start)
@@ -73,19 +45,7 @@ class _EntropyDecay(BaseCallback):
         return True
 
 
-class _ProgressPrinter(BaseCallback):
-    """Print a training line every ``print_freq`` steps and save the best model.
-
-    Shows the running mean episode reward + length, plus — when the env's Monitor
-    records them — the overtaking progress (cars passed per episode and per 100
-    steps), the lane changes per episode and the crash rate, and the **action mix**
-    over the last print window (L/I/R/F/S %), so it is obvious whether the agent is
-    exploring all five manoeuvres or collapsing onto one. Whenever the mean reward
-    improves it checkpoints the model to ``best_path`` — so the saved checkpoint is
-    the best (highest reward) policy seen, not just the final one. The same numbers
-    are logged to ``progress.csv`` for the training-curve plots.
-    """
-
+class ProgressPrinter(BaseCallback):
     def __init__(self, tag, print_freq=200, best_path=None, total_steps=None):
         super().__init__()
         self.tag = tag
@@ -94,81 +54,47 @@ class _ProgressPrinter(BaseCallback):
         self.total_steps = total_steps
         self.best_rew = -float("inf")
         self.saved_best = False
-        self.total_overtakes = 0      # running count of cars passed over the whole run
-        self._action_counts = None    # per-window action histogram (sized at start)
-        self._first_done = False
-        self._t0 = None
-        self._start_step = 0
-        self._next = self.print_freq
+        self.total_overtakes = 0
+        self.action_counts = None
+        self.first_done = False
+        self.t0 = None
+        self.start_step = 0
+        self.next_print = self.print_freq
 
     def _on_training_start(self):
-        self._t0 = time.time()
-        self._start_step = self.num_timesteps
-        self._next = self.num_timesteps + self.print_freq
+        self.t0 = time.time()
+        self.start_step = self.num_timesteps
+        self.next_print = self.num_timesteps + self.print_freq
         n = getattr(self.training_env.action_space, "n", 0)
-        self._action_counts = np.zeros(int(n), dtype=np.int64) if n else None
-
-    def _action_mix(self):
-        """Compact 'act L12/I8/R11/F58/S11%' string for the current window, then reset."""
-        if self._action_counts is None or self._action_counts.sum() == 0:
-            return ""
-        total = self._action_counts.sum()
-        labels = _ACTION_LETTERS if len(self._action_counts) == len(_ACTION_LETTERS) \
-            else [str(i) for i in range(len(self._action_counts))]
-        mix = "/".join(f"{l}{100 * c / total:.0f}"
-                       for l, c in zip(labels, self._action_counts))
-        self._action_counts[:] = 0
-        return f" | act {mix}%"
-
-    def _speed(self):
-        elapsed = max(time.time() - (self._t0 or time.time()), 1e-6)
-        done = max(self.num_timesteps - self._start_step, 0)
-        sps = done / elapsed
-        if self.total_steps:
-            eta = max(0.0, (self.total_steps - self.num_timesteps) / max(sps, 1e-6))
-            return f" | {sps:4.0f} steps/s | ETA {eta / 60:4.1f} min"
-        return f" | {sps:4.0f} steps/s"
+        self.action_counts = np.zeros(int(n), dtype=np.int64) if n else None
 
     def _on_step(self):
-        # Histogram the actions taken this step (exploration visibility).
-        if self._action_counts is not None:
+        if self.action_counts is not None:
             acts = self.locals.get("actions")
             if acts is not None:
                 for a in np.asarray(acts).ravel().astype(int):
-                    if 0 <= a < len(self._action_counts):
-                        self._action_counts[a] += 1
+                    if 0 <= a < len(self.action_counts):
+                        self.action_counts[a] += 1
 
-        # Accumulate the running overtake total as episodes finish (Monitor puts
-        # the info_keywords into info["episode"] at the last step of each episode).
         for info in self.locals.get("infos", []):
             ep = info.get("episode")
             if ep is not None:
                 self.total_overtakes += int(ep.get("overtakes", 0))
 
-        if not self._first_done and (self.model.ep_info_buffer or []):
-            self._first_done = True
-            e = list(self.model.ep_info_buffer)[-1]
-            print(f"[{self.tag}] step {self.num_timesteps:>7} | first episode done "
-                  f"| reward {float(e['r']):.2f} | length {int(e['l'])}{self._speed()}", flush=True)
-
-        if self.num_timesteps >= self._next:
-            self._next += self.print_freq
+        if self.num_timesteps >= self.next_print:
+            self.next_print += self.print_freq
             buf = list(self.model.ep_info_buffer or [])
             if buf:
                 r = float(np.mean([e["r"] for e in buf]))
                 ln = float(np.mean([e["l"] for e in buf]))
-                ot = ""
-                if "overtakes" in buf[-1]:   # Monitor(info_keywords) provides these
+
+                ot_str = ""
+                if "overtakes" in buf[-1]:
                     ot_mean = float(np.mean([e["overtakes"] for e in buf]))
-                    ot100 = 100.0 * sum(e["overtakes"] for e in buf) / max(1, sum(e["l"] for e in buf))
-                    lc_mean = float(np.mean([e.get("lane_changes", 0) for e in buf]))
                     crash = float(np.mean([e["crashed"] for e in buf]))
-                    ot = (f" | overtakes {self.total_overtakes} total, {ot_mean:4.2f}/ep "
-                          f"({ot100:4.1f}/100 steps) | lane_ch {lc_mean:4.2f}/ep "
-                          f"| crash {crash:4.0%}")
-                    # Write one COMPLETE curve row per print, for every algorithm —
-                    # SB3's own dump cadence differs per algo (per rollout for PPO,
-                    # every N episodes for DQN) and can miss the recorded values.
+                    lc_mean = float(np.mean([e.get("lane_changes", 0) for e in buf]))
+                    ot_str = f" | overtakes {ot_mean:.2f}/ep | crash {crash:.0%}"
+
                     self.model.logger.record("rollout/ep_rew_mean", r)
                     self.model.logger.record("rollout/ep_len_mean", ln)
                     self.model.logger.record("rollout/ep_overtakes_mean", ot_mean)
@@ -176,57 +102,32 @@ class _ProgressPrinter(BaseCallback):
                     self.model.logger.record("rollout/ep_crash_rate", crash)
                     self.model.logger.record("time/total_timesteps", self.num_timesteps)
                     self.model.logger.dump(self.num_timesteps)
-                ot += self._action_mix()
-                if hasattr(self.model, "exploration_rate"):        # DQN family: ε
-                    extra = f" | eps {self.model.exploration_rate:.3f}"
-                elif isinstance(getattr(self.model, "ent_coef", None), float):   # PPO family: entropy
-                    extra = f" | ent {self.model.ent_coef:.3f}"
-                else:
-                    extra = ""
+
                 flag = ""
                 if self.best_path is not None and r > self.best_rew:
                     self.best_rew = r
                     self.model.save(self.best_path)
                     self.saved_best = True
-                    flag = "  <- new best, saved"
+                    flag = "  <- best"
+
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
-                      f"ep_rew_mean {r:7.2f} | ep_len_mean {ln:6.1f}{ot}"
-                      f"{extra}{self._speed()}{flag}", flush=True)
-            else:
-                print(f"[{self.tag}] step {self.num_timesteps:>7} | "
-                      f"collecting first episodes…{self._speed()}", flush=True)
+                      f"reward {r:7.2f} | len {ln:5.1f}{ot_str}{flag}", flush=True)
         return True
 
 
-def _attach_logger(model, cfg, tag):
-    """Log training curves to ``metrics/curves/<tag>/progress.csv`` (CSV only).
-
-    SB3 writes ``rollout/ep_rew_mean`` and ``rollout/ep_len_mean`` vs
-    ``time/total_timesteps`` there, so ``eval.plots.plot_training_curves`` can
-    compare the three algorithms. CSV-only keeps the console output to the clean
-    progress lines.
-    """
+def attach_logger(model, cfg, tag):
     folder = curve_dir(cfg, tag)
     model.set_logger(configure(folder, ["csv"]))
     return folder
 
 
-def _effective_total(total_timesteps, rollout_steps):
-    """Round a step budget up to a whole rollout so the printed ETA ends at 0.
-
-    SB3 only checks ``total_timesteps`` at rollout boundaries, so a run actually
-    stops at the next multiple of the rollout size (``n_steps`` for PPO,
-    ``train_freq`` for DQN). Training to that number keeps the ETA honest.
-    """
+def effective_total(total_timesteps, rollout_steps):
     rollout_steps = max(1, int(rollout_steps))
     return math.ceil(total_timesteps / rollout_steps) * rollout_steps
 
 
-# =============================================================================
-# Part 1 — the three discrete baselines on highway-env
-# =============================================================================
+# Build models
 def build_ppo(cfg, env, device=None):
-    """Construct the PPO model (on-policy policy-gradient) from the config."""
     p = cfg["ppo"]
     return PPO(
         p["policy"], env,
@@ -239,9 +140,7 @@ def build_ppo(cfg, env, device=None):
     )
 
 
-def _build_q_learner(cls, q, cfg, env, device):
-    """Shared constructor for the value-based pair — DQN and QR-DQN take the
-    same arguments, so the fair-ablation twin configs stay in lockstep."""
+def build_q_learner(cls, q, cfg, env, device):
     return cls(
         q["policy"], env,
         learning_rate=q["learning_rate"], buffer_size=q["buffer_size"],
@@ -256,90 +155,67 @@ def _build_q_learner(cls, q, cfg, env, device):
 
 
 def build_dqn(cfg, env, device=None):
-    """Construct the DQN model (off-policy value-based) from the config."""
-    return _build_q_learner(DQN, cfg["dqn"], cfg, env, device)
+    return build_q_learner(DQN, cfg["dqn"], cfg, env, device)
 
 
 def build_qrdqn(cfg, env, device=None):
-    """Construct the QR-DQN model (off-policy distributional) from the config."""
-    return _build_q_learner(QRDQN, cfg["qrdqn"], cfg, env, device)
+    return build_q_learner(QRDQN, cfg["qrdqn"], cfg, env, device)
 
 
-def _train(cfg, tag, model, env, rollout_steps, path=None, extra_callbacks=()):
-    """Shared training runner: attach the CSV logger, train for the ONE shared
-    ``train.total_timesteps`` budget with live progress + best-checkpointing,
-    and return the best model."""
-    _attach_logger(model, cfg, tag)
+# Training
+def train_model(cfg, tag, model, env, rollout_steps, path=None, extra_callbacks=()):
+    attach_logger(model, cfg, tag)
     path = path or drive_path(cfg, "checkpoints", f"{tag}.zip")
     pf = cfg.get("print_freq", 200)
-    total = _effective_total(cfg["train"]["total_timesteps"], rollout_steps)
+    total = effective_total(cfg["train"]["total_timesteps"], rollout_steps)
     label = tag.upper()
-    print(f"[{label}] training for {total} steps on device='{model.device}' "
-          f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter(label, pf, best_path=path, total_steps=total)
+    print(f"[{label}] training {total} steps on {model.device}", flush=True)
+    printer = ProgressPrinter(label, pf, best_path=path, total_steps=total)
     model.learn(total_timesteps=total, callback=[printer, *extra_callbacks])
 
     if printer.saved_best:
-        print(f"[{label}] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        print(f"[{label}] done, best reward={printer.best_rew:.2f} -> {path}", flush=True)
         model = type(model).load(path)
     else:
         model.save(path)
-        print(f"[{label}] done. saved final model -> {path}", flush=True)
+        print(f"[{label}] done -> {path}", flush=True)
     env.close()
     return model
 
 
 def train_ppo(cfg, path=None):
-    """Train the PPO baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
-    env = _monitored_env(cfg)
+    env = monitored_env(cfg)
     p = cfg["ppo"]
-    decay = _EntropyDecay(p["ent_coef"], p.get("ent_coef_final", p["ent_coef"]),
-                          cfg["train"]["total_timesteps"])
-    return _train(cfg, "ppo", build_ppo(cfg, env), env, p["n_steps"], path,
-                  extra_callbacks=(decay,))
+    decay = EntropyDecay(p["ent_coef"], p.get("ent_coef_final", p["ent_coef"]),
+                         cfg["train"]["total_timesteps"])
+    return train_model(cfg, "ppo", build_ppo(cfg, env), env, p["n_steps"], path,
+                       extra_callbacks=(decay,))
 
 
 def train_dqn(cfg, path=None):
-    """Train the DQN baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
-    env = _monitored_env(cfg)
+    env = monitored_env(cfg)
     tf = cfg["dqn"]["train_freq"] if isinstance(cfg["dqn"]["train_freq"], int) else 1
-    return _train(cfg, "dqn", build_dqn(cfg, env), env, tf, path)
+    return train_model(cfg, "dqn", build_dqn(cfg, env), env, tf, path)
 
 
 def train_qrdqn(cfg, path=None):
-    """Train the QR-DQN baseline and checkpoint the best to Drive."""
     set_global_seeds(cfg["seed"])
-    env = _monitored_env(cfg)
+    env = monitored_env(cfg)
     tf = cfg["qrdqn"]["train_freq"] if isinstance(cfg["qrdqn"]["train_freq"], int) else 1
-    return _train(cfg, "qrdqn", build_qrdqn(cfg, env), env, tf, path)
+    return train_model(cfg, "qrdqn", build_qrdqn(cfg, env), env, tf, path)
 
 
 def load_model(path, algo):
-    """Reload a saved checkpoint. ``algo`` is ``'ppo'``, ``'dqn'`` or ``'qrdqn'``."""
     key = algo.lower()
-    if key not in _ALGOS:
-        raise ValueError(f"Unknown algo '{algo}'; expected one of {list(_ALGOS)}")
-    return _ALGOS[key].load(path)
+    if key not in ALGOS:
+        raise ValueError(f"Unknown algo '{algo}'; expected one of {list(ALGOS)}")
+    return ALGOS[key].load(path)
 
 
-def as_predictor(model, algo):
-    """Return a model ready for the shared eval/demo loops.
-
-    All three baselines (PPO, DQN, QR-DQN) are feed-forward, so a plain
-    ``model.predict(obs)`` is correct and the model is returned unchanged. Kept
-    as a seam so a future stateful policy could reintroduce a ``reset_states``
-    facade without touching the eval/demo call sites (they guard it with
-    ``hasattr``)."""
-    return model
-
-
-# =============================================================================
-# Part 2 — logic-shaped reward fine-tune (Step C)
-# =============================================================================
-def _to_device(model, cfg):
-    """Move an already-loaded SB3 model to the resolved device (for fine-tuning)."""
+# Part 2 — logic-shaped reward fine-tune
+def to_device(model, cfg):
     dev = resolve_device(cfg)
     try:
         import torch
@@ -351,37 +227,30 @@ def _to_device(model, cfg):
 
 
 def finetune_logic_reward(model, cfg, drive_dir=None):
-    """Warm-start ``model`` and continue training on the logic-augmented reward.
-
-    The genuine "fine-tune": same policy, a lower learning rate, fewer steps, and
-    an env whose reward includes ``- Σ λ_i · violation_i`` (LogicRewardWrapper).
-    Returns the fine-tuned model and checkpoints it as ``part2_nesy.zip``.
-    """
     set_global_seeds(cfg["seed"])
     ft = cfg["finetune"]
-    env = _monitored_env(cfg, logic_reward=True)
+    env = monitored_env(cfg, logic_reward=True)
 
     model.set_env(env)
-    _to_device(model, cfg)
+    to_device(model, cfg)
     ft_lr = ft["learning_rate"]
     model.learning_rate = ft_lr
     model.lr_schedule = lambda _progress_remaining: ft_lr
 
-    _attach_logger(model, cfg, "part2_nesy")
+    attach_logger(model, cfg, "part2_nesy")
     path = drive_dir or drive_path(cfg, "checkpoints", "part2_nesy.zip")
     pf = cfg.get("print_freq", 200)
     start = int(model.num_timesteps)
-    extra = _effective_total(ft["total_timesteps"], getattr(model, "n_steps", 1))
-    print(f"[NESY-FT] fine-tuning for {extra} more steps on device='{model.device}' "
-          f"(printing every {pf} steps)…", flush=True)
-    printer = _ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra)
+    extra = effective_total(ft["total_timesteps"], getattr(model, "n_steps", 1))
+    print(f"[NESY-FT] fine-tuning {extra} steps on {model.device}", flush=True)
+    printer = ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra)
     model.learn(total_timesteps=extra, callback=printer, reset_num_timesteps=False)
 
     if printer.saved_best:
-        print(f"[NESY-FT] done. best ep_rew_mean={printer.best_rew:.2f} -> {path}", flush=True)
+        print(f"[NESY-FT] done, best reward={printer.best_rew:.2f} -> {path}", flush=True)
         model = type(model).load(path)
     else:
         model.save(path)
-        print(f"[NESY-FT] done. saved final model -> {path}", flush=True)
+        print(f"[NESY-FT] done -> {path}", flush=True)
     env.close()
     return model

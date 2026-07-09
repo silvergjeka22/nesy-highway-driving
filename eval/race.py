@@ -22,7 +22,7 @@ import numpy as np
 
 # The factory import must come first: it blocks pygame's pkg_resources import
 # (fixing the deprecation warning at the source) and registers highway-env.
-from envs.highway_factory import _ensure_render_backend
+from envs.highway_factory import ensure_render_backend
 
 import gymnasium as gym  # noqa: E402
 
@@ -44,7 +44,7 @@ def make_race_env(cfg, n_agents=2, render=False):
     env_cfg["duration"] = cfg["race"].get("duration", env_cfg["duration"])
 
     if render:
-        _ensure_render_backend()
+        ensure_render_backend()
         env_cfg["offscreen_rendering"] = True   # avoid the display window that segfaults on Colab
 
     env = gym.make(

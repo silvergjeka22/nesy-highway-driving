@@ -50,7 +50,7 @@ import numpy as np  # noqa: E402
 
 from utils import load_config, save_mp4  # noqa: E402
 from envs.highway_factory import create_environment, read_scene  # noqa: E402
-from agents.baselines import load_model, as_predictor, build_ppo, build_dqn, build_qrdqn  # noqa: E402
+from agents.baselines import load_model, build_ppo, build_dqn, build_qrdqn  # noqa: E402
 from nesy.roadmap import predicates, safety_shield  # noqa: E402
 
 _BUILDERS = {"ppo": build_ppo, "dqn": build_dqn, "qrdqn": build_qrdqn}
@@ -189,7 +189,6 @@ def main():
         model = load_policy_weights(args.model, args.algo, cfg)
     else:
         model = load_model(args.model, args.algo)
-    model = as_predictor(model, args.algo)   # feed-forward models pass through unchanged
     print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
     path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield,
                                     min_seconds=min_seconds, no_crash=args.no_crash)

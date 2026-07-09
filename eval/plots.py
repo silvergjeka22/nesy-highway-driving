@@ -1,11 +1,3 @@
-"""Plots for the notebooks: training curves, eval comparison, rule violations.
-
-Function-only. Reads the CSV training logs written by ``agents.baselines``
-(``metrics/curves/<tag>/progress.csv``) and the metric dicts returned by
-``eval.evaluate.evaluate``. Every figure is returned (for inline display) and
-optionally saved to Drive as a PNG. The notebooks call these.
-"""
-
 import os
 
 import numpy as np
@@ -15,16 +7,7 @@ import matplotlib.pyplot as plt
 from utils import curve_dir, drive_path
 
 
-# =============================================================================
-# Part 1 — training curves (PPO vs DQN vs QR-DQN)
-# =============================================================================
 def load_curve(cfg, tag):
-    """Load one model's training curve from SB3's ``progress.csv``.
-
-    Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean),
-    ``len`` (ep_len_mean), ``overtakes``, ``lane_changes`` and ``crash`` (recorded
-    by the training progress callback), or ``None`` if the log is missing.
-    """
     csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
         return None
@@ -40,13 +23,6 @@ def load_curve(cfg, tag):
 
 
 def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
-    """Reward, episode length, overtakes, lane changes and crash rate vs timesteps.
-
-    The overtakes panel shows the agent *learning to pass traffic*, the
-    lane-changes panel whether it actually uses the manoeuvre actions, and the
-    crash panel what the aggression costs. Returns the figure; saves
-    ``metrics/training_curves.png`` to Drive.
-    """
     panels = [("rew", "mean episode reward"), ("len", "mean episode length"),
               ("overtakes", "overtakes per episode"),
               ("lane_changes", "lane changes per episode"), ("crash", "crash rate")]
@@ -56,15 +32,12 @@ def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
         if df is None or df.empty:
             continue
         for ax, (col, _) in zip(axes.flat, panels):
-            # SB3's own dump rows interleave with the printer's full rows, leaving
-            # NaN holes that break the line into disconnected dots — drop them
-            # per column so every curve is a continuous line.
             d = df[["t", col]].dropna().sort_values("t")
             ax.plot(d["t"], d[col], marker=".", label=tag.upper())
     for ax, (col, title) in zip(axes.flat, panels):
         ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
         if col == "crash":
-            ax.set_ylim(0.0, 1.05)      # full 0-100% scale: a 0.9-1.0 zoom exaggerates noise
+            ax.set_ylim(0.0, 1.05)
         ax.grid(alpha=0.3)
         ax.legend()
     for ax in axes.flat[len(panels):]:
@@ -75,16 +48,7 @@ def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
     return fig
 
 
-# =============================================================================
-# Parts 1-4 — evaluation comparison (bars with std)
-# =============================================================================
 def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
-    """Grouped bars comparing models on the headline eval metrics.
-
-    Args:
-        metrics_by_name: ``{label: evaluate(...) dict}``.
-        cfg, save_as: if both given, save the PNG to ``metrics/<save_as>``.
-    """
     names = list(metrics_by_name)
     panels = [
         ("crash_rate", lambda s: s["crash_rate"], None),
@@ -110,17 +74,10 @@ def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
     return fig
 
 
-# =============================================================================
-# Part 2 (XAI) — per-rule violation rates: shield vs no-shield, etc.
-# =============================================================================
 RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 
 
 def plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png"):
-    """Grouped bars: per-rule violation rate for each config (the XAI headline).
-
-    Lower is better. Use to show shield / logic-reward cut violations vs baseline.
-    """
     names = list(metrics_by_name)
     fig, ax = plt.subplots(figsize=(10, 4.5))
     x = np.arange(len(RULES))
@@ -129,7 +86,7 @@ def plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png
         rv = metrics_by_name[n]["summary"].get("rule_violation_rate", {})
         vals = [rv.get(r, 0.0) for r in RULES]
         ax.bar(x + i * width, vals, width, label=n)
-    ax.set(title="Per-rule violation rate (independent monitor) — lower is better",
+    ax.set(title="Per-rule violation rate — lower is better",
            xlabel="rule", ylabel="fraction of steps violating")
     ax.set_xticks(x + width * (len(names) - 1) / 2)
     ax.set_xticklabels(RULES)
