@@ -129,6 +129,20 @@ def read_kin_obs_md(env, cfg):
     return kin_obs_from_scene(read_scene_md(env), cfg)
 
 
+def scene_to_lidar(scene, n_lasers=72, max_range=50.0):
+    """Convert scene vehicle positions into pseudo-lidar ranges for Lab 2 integration."""
+    ego = scene["ego"]
+    ranges = np.full(n_lasers, max_range)
+    for o in scene.get("others", []):
+        dx = o["x"] - ego["x"]
+        dy = o["y"] - ego["y"]
+        dist = (dx ** 2 + dy ** 2) ** 0.5
+        angle = np.arctan2(dy, dx)
+        idx = int((angle + np.pi) / (2 * np.pi) * n_lasers) % n_lasers
+        ranges[idx] = min(ranges[idx], dist)
+    return ranges
+
+
 def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
     """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge. Returns (action, fsm_state)."""
     from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS
@@ -143,7 +157,8 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
         manoeuvre = ACTIONS[idx]
     v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
     if shield:
-        (v, omega), _ = continuous_shield(v, omega, scene, cfg)
+        lidar = scene_to_lidar(scene, cfg["metadrive"].get("lidar_num_lasers", 72))
+        (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
     md = cfg["metadrive"]
     return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
 

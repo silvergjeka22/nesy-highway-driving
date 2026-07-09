@@ -109,6 +109,13 @@ qrdqn:
     net_arch: [256, 256]
     n_quantiles: 50
 
+# MCTS — logic-guided planning (Lab 4, slides 104-118)
+mcts:
+  n_simulations: 20          # rollouts per decision step
+  depth: 3                   # rollout horizon (steps)
+  p_heuristic: 0.7           # probability of picking from admissible actions
+  gamma: 0.98                # discount factor for rollout returns
+
 eval:
   episodes_per_seed: 5
   deterministic: true
@@ -164,7 +171,6 @@ rules:
     RI2: 0.50
     RG4: 0.30
     RG2: 0.30
-    overtaken_accel: 0.20
 
 fsm:
   initial_state: CRUISE

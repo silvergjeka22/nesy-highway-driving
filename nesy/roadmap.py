@@ -202,15 +202,13 @@ def safest_fallback(preds, cfg, allowed=None):
 # =============================================================================
 # Part 3 — continuous shield (CBF + velocity obstacles) on the (v, ω) action
 # =============================================================================
-def continuous_shield(v_cmd, omega_cmd, scene, cfg):
+def continuous_shield(v_cmd, omega_cmd, scene, cfg, lidar_ranges=None):
     """Continuous analogue of ``safety_shield`` for the MetaDrive ``(v, ω)`` action.
 
-    The **same hard rules**, encoded on the continuous command instead of the
-    discrete manoeuvre set:
-      * CBF (Lab 5) — longitudinal safety: RG1 safe distance, RG3 speed limit,
-        RI1 no-stop, stay-on-road (see ``labs.lab5_cbf.cbf_filter``).
-      * Velocity obstacles (Lab 4) — lateral safety: veto a turn into a neighbour
-        on a collision course, mirroring the shield gating ``LANE_LEFT/RIGHT``.
+    Three layers, one per lab:
+      * Lab 5 CBF — longitudinal safety (RG1, RG3, RI1, stay-on-road).
+      * Lab 4 VO  — lateral safety (veto turns into collision courses).
+      * Lab 2 LIDAR — reactive fallback when ranges detect close obstacles.
 
     Returns ``((v_safe, ω_safe), intervened)``.
     """
@@ -222,6 +220,18 @@ def continuous_shield(v_cmd, omega_cmd, scene, cfg):
     if abs(omega_safe) > 1e-6 and not gap_is_safe(scene["ego"], scene.get("others", []), cfg):
         omega_safe = 0.0
         intervened = True
+
+    # Lab 2: LIDAR reactive fallback — if ranges detect a close obstacle that the
+    # scene-based predicates missed, cap speed to the reactive avoidance command.
+    if lidar_ranges is not None:
+        from labs.lab2_lidar_avoidance import lidar_to_predicates, reactive_avoidance
+        lpreds = lidar_to_predicates(lidar_ranges, cfg)
+        if lpreds["too_close"]:
+            v_react, _ = reactive_avoidance(lidar_ranges, cfg)
+            if v_react < v_safe:
+                v_safe = v_react
+                intervened = True
+
     return (v_safe, omega_safe), intervened
 
 

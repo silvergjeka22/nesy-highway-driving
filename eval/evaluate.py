@@ -14,6 +14,8 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
     ec = cfg["eval"]
 
     env = env_fn(cfg, False)
+    if hasattr(model, "set_eval_env"):
+        model.set_eval_env(env)
     rows = []
     try:
         for i, seed in enumerate(seeds):
