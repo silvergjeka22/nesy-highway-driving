@@ -26,7 +26,7 @@ Read and stay faithful to the real APIs and plan in:
 * `README.md` (the whole plan, the rule catalog §4, the conventions §6), `TODO.md` (what is
   done vs stretch — do not re-solve stretch items).
 * `configs/highway.yaml` — the ONE config: `env`, `shaping`, `train`, `rppo`, `dqn`, `qrdqn`,
-  `eval`, `select`, `rules`, `fsm`, `finetune`, `metadrive`, `cbf`, `vo`, `race`. No
+  `eval`, `select`, `rules`, `fsm`, `finetune`, `metadrive`, `cbf`, `vo`. No
   hyperparameter is ever hard-coded in a notebook; the notebook only loads and selects.
 * `utils.py` — `load_config`, `set_global_seeds`, `drive_path(cfg, key, *parts)`,
   `curve_dir(cfg, tag)`, `save_mp4(frames, path, fps)`, `save_json`.
@@ -59,10 +59,6 @@ best = select_nesy_method(metrics_by_name, cfg, baseline_key=None)   # Part 2 pi
 plot_training_curves(cfg, tags=("rppo","dqn","qrdqn"))
 plot_eval_comparison(metrics_by_name, cfg=None, save_as=None)
 plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png")
-
-# eval/race.py   (Part 4)
-out = race(model_a, model_b, cfg, seeds=None)                 # scorecard dict
-record_race_video(model_a, model_b, cfg, path, seed=None)
 
 # nesy/roadmap.py
 preds = predicates(scene, cfg)
@@ -211,45 +207,3 @@ Do:
 If the 3D buffer is unavailable (CPU), fall back to the top-down recorder but keep the same
 live-velocity overlay.
 
----
-
-### Notebook 4 — `colab_4_race.ipynb`: race with target-vs-target collisions disabled
-Extra reads: `eval/race.py`, `envs/highway_factory.py`, `nesy/roadmap.py`, `configs/highway.yaml`
-(`race` block), `part1_best.json`, `part2_nesy.zip`.
-
-**Outcome.** Put both agents — **A = the plain Part-1 baseline (no shield)** and **B = the
-Part-2 NeSy agent (shield on)** — in the **same highway scene** and race them: each overtakes
-the background traffic and tries to get ahead of the other. Score *who gets ahead* **and** *who
-stays safe / rule-compliant under competitive pressure*, never the winner alone.
-
-New required behaviour — **the two target cars must not crash into each other.** The two
-controlled vehicles should be able to overlap / pass through one another without registering a
-collision, while **still crashing normally against the background (field) traffic.** Implement
-this as a config-gated env option, not a notebook hack:
-
-1. Add `race.no_target_collisions: true` to the `race` block in `configs/highway.yaml` (default
-   on, with a one-line comment).
-2. In `envs/highway_factory.py` (or `eval/race.py`'s `make_race_env`, whichever owns the race
-   env) implement the flag so that **collision handling between the two controlled vehicles is
-   suppressed** — e.g. wrap/patch highway-env's per-pair collision check so a pair is only a
-   crash when at least one vehicle is *not* controlled. Controlled-vs-background collisions must
-   behave exactly as before. Keep it a pure function/wrapper; add a one-line note in the
-   notebook explaining the change and *why* (so a car isn't eliminated by its rival rather than
-   by its own bad driving — the race measures driving skill vs the field, not bumper-cars).
-3. Verify the flag: a quick assertion cell that forces the two controlled cars together and
-   confirms neither reports `crashed`, while a controlled car driven into background traffic
-   still does.
-
-Then:
-4. Load A (`part1_best.zip`) and B (`part2_nesy.zip`); run `race(model_a, model_b, cfg, seeds)`
-   over the `race.seeds` (start slots swap on alternate seeds to cancel positional bias).
-5. **Scorecard**, printed as a table (minimal plotting): per-agent progress/distance,
-   overtakes vs the field, crashes against the field, per-rule violation rate (independent
-   monitor), and B's shield-intervention rate. Always pair progress with crash + violation
-   metrics.
-6. **Register the video to Drive.** `record_race_video(model_a, model_b, cfg, path, seed=...)`
-   → `part4_race.mp4` under `.../videos/`; print the path, confirm it landed, display inline.
-
-Honest caveat to state: a "be ahead" incentive rewards aggression, so the scorecard reports
-safety alongside finishing position — and with target-vs-target collisions off, any remaining
-crash is genuinely the agent's own fault against the field.

@@ -55,7 +55,7 @@ violations" is an honest, auditable, *simulatable* measurement, exactly the XAI 
 
 ---
 
-## 3. The four parts (one Colab notebook each)
+## 3. The three parts (one Colab notebook each)
 
 Each notebook follows the **same conventions** (function-only `.py` modules imported by the notebook,
 one config YAML, clone-from-GitHub + mount Drive, fixed seeds) and **ends by saving an `.mp4` to
@@ -66,7 +66,6 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
 | [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **RecurrentPPO vs DQN vs QR-DQN** to overtake aggressively, evaluate + compare, pick the **best** | `rppo.zip`/`dqn.zip`/`qrdqn.zip`/`part1_best.zip` **+ `part1_best.mp4`** + plots |
 | [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, compare the four configs, pick the best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
 | [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | run the **second-best** algorithm on **MetaDrive** via the labs (velocity action, CBF/VO) | metrics + **`part3_metadrive.mp4`** (3D) |
-| [`colab_4_race.ipynb`](notebooks/colab_4_race.ipynb) | **Part 4** | **race** the NeSy agent vs the no-NeSy baseline in one scene | race scorecard **+ `part4_race.mp4`** |
 
 ### Part 1 — baseline: RecurrentPPO vs DQN vs QR-DQN, save the best (`colab_1_baseline.ipynb`)
 
@@ -97,7 +96,7 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
    % episodes with ≥1 pass, max passes) so a crash-shortened episode isn't mistaken for "the car
    never overtakes".
 6. **Pick the winner** (most overtakes, tie → distance, among models that actually learn to pass)
-   → save `part1_best.zip` + `part1_best.json` (which algorithm won — Parts 2-4 read these), then
+   → save `part1_best.zip` + `part1_best.json` (which algorithm won — Parts 2-3 read these), then
    record the ≥30s **`part1_best.mp4`** with `demo/demo.py` (separate process, prints overtakes
    while recording).
 
@@ -139,15 +138,6 @@ barrier, all reducing to `gap < safe_distance`) **runs without MetaDrive**. Ends
 chase-camera video** recorded offscreen (`demo/demo_md.py`, GPU runtime; auto-falls back to
 top-down on CPU). MetaDrive needs Python ≤ 3.11 → the notebook installs the **condacolab
 Python-3.10 runtime** (one kernel restart, then Run all again).
-
-### Part 4 — race: NeSy vs no-NeSy (capstone)
-
-Put both agents in the **same** multi-agent scene and let them race — each overtakes background
-traffic and tries to surpass the other — scoring *who gets ahead* (distance, per-agent overtakes)
-**and** *who stays safe and rule-compliant under competitive pressure* (crashes, per-rule violation
-rates, shield interventions). Start slots swap on alternate seeds to cancel positional bias.
-**Honest caveat:** a "be ahead" incentive rewards aggression, so the scorecard **always** pairs
-finishing progress with crash + violation metrics, never the winner alone.
 
 ---
 
@@ -199,22 +189,20 @@ nesy-highway-driving/
 ├── TODO.md                       # done / remaining / notes
 ├── requirements.txt
 ├── utils.py                      # config, seeds, Drive paths, save_mp4, curve_dir
-├── configs/highway.yaml          # the ONE config: env + shaping + ppo + dqn + rules{} + fsm{} + metadrive{} + cbf{} + vo{} + race{}
+├── configs/highway.yaml          # the ONE config: env + shaping + ppo + dqn + rules{} + fsm{} + metadrive{} + cbf{} + vo{}
 ├── notebooks/                    # the only place code executes
 │   ├── colab_1_baseline.ipynb    # Part 1  -> part1_best.mp4
 │   ├── colab_2_nesy.ipynb        # Part 2  -> part2_nesy.mp4   (XAI)
-│   ├── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4 (3D)
-│   └── colab_4_race.ipynb        # Part 4  -> part4_race.mp4
+│   └── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4 (3D)
 ├── envs/
-│   ├── highway_factory.py        # create_environment(cfg), read_scene(env), reward wrappers [Parts 1-2,4]
+│   ├── highway_factory.py        # create_environment(cfg), read_scene(env), reward wrappers [Parts 1-2]
 │   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), the Lab-1 bridge     [Part 3]
 ├── agents/baselines.py           # train_rppo/dqn/qrdqn, load_model, finetune_logic_reward
 ├── eval/
 │   ├── evaluate.py               # evaluate(), evaluate_nesy_md(), select_nesy_method()
 │   ├── plots.py                  # plot_training_curves(), plot_eval_comparison(), plot_violation_rates()
-│   └── race.py                   # make_race_env(), race(), record_race_video()
 ├── demo/
-│   ├── demo.py                   # standalone ≥30s video: highway (Parts 1-2, 4-ready), prints overtakes + OK/FAIL
+│   ├── demo.py                   # standalone ≥30s video: highway (Parts 1-2), prints overtakes + OK/FAIL
 │   └── demo_md.py                # standalone ≥30s video: MetaDrive 3D / top-down (Part 3)
 ├── nesy/roadmap.py               # predicates(), safety_shield(), continuous_shield(), rule_violations()
 ├── labs/                         # lab1_cmd_vel, lab2_lidar_avoidance, lab3_fsm, lab4_velocity_obstacles, lab5_cbf
@@ -222,7 +210,7 @@ nesy-highway-driving/
 ```
 
 **Conventions**
-- **Function-only `.py` files** — no top-level execution; the four notebooks are the only orchestration.
+- **Function-only `.py` files** — no top-level execution; the three notebooks are the only orchestration.
 - **One config YAML** — every quantity lives in `configs/highway.yaml` (incl. all rule parameters);
   nothing is hard-coded.
 - **Colab workflow** — each notebook mounts Drive, clones the repo (GitHub token prompt), installs
@@ -250,7 +238,7 @@ rate (independent monitor). All three Part-1 algorithms and every NeSy config on
    and installs the dependencies.
 3. Run the parts in order — each loads the previous part's checkpoints from Drive:
    **Part 1** (trains `rppo.zip`/`dqn.zip`/`qrdqn.zip`, saves `part1_best.zip` + `part1_best.json`) →
-   **Part 2** (loads `part1_best`, saves `part2_nesy.zip`) → **Part 3** / **Part 4**.
+   **Part 2** (loads `part1_best`, saves `part2_nesy.zip`) → **Part 3**.
 4. **Part 3 only:** MetaDrive needs Python ≤ 3.11, so its first cell installs **condacolab
    (Python 3.10)** and restarts the kernel once — expected; just Run all again. The **3D video
    needs a GPU runtime** (Runtime → Change runtime type → GPU); on CPU it falls back to top-down.
@@ -260,7 +248,7 @@ rate (independent monitor). All three Part-1 algorithms and every NeSy config on
 ## 8. Papers
 
 - **Interstate rules** — Maierhofer et al., *IEEE IV 2020* — safe distance, braking, speed, flow, no
-  stopping, no passing-right, emergency lane. → `highway-env` (Parts 1–2, 4). PDF in [`paper/`](paper/).
+  stopping, no passing-right, emergency lane. → `highway-env` (Parts 1–2). PDF in [`paper/`](paper/).
 - **Intersection rules** — Maierhofer et al., *IEEE IV 2022* — stop signs, lights, right-before-left,
   priority, left-turn yielding. → MetaDrive (Part 3). PDF in [`paper/`](paper/).
 - **XAI · Neurosymbolic AI lecture** — Dr. Daniele Meli (`paper/XAI_NeSy.pptx`) — System 1/2, Kautz's

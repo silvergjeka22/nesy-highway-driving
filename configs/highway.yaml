@@ -1,12 +1,11 @@
 # =============================================================================
-# Single source of truth for ALL FOUR PARTS (see README.md for the full plan).
+# Single source of truth for ALL THREE PARTS (see README.md for the full plan).
 # Nothing is hard-coded in the .py modules — every quantity lives here.
 # Loaded once per notebook via utils.load_config().
 #
 #   Part 1 (baseline) ....... env, shaping, train, rppo, dqn, qrdqn, eval
 #   Part 2 (NeSy) ........... rules{}, fsm{}            -> nesy/ + labs/lab3,lab4
 #   Part 3 (MetaDrive) ...... metadrive{}, cbf{}, vo{}  -> envs/metadrive_factory + labs/lab1,2,5
-#   Part 4 (race) ........... race{}                    -> eval/record_race_video
 #
 # Rule parameters are taken from Maierhofer et al., "Formalization of Interstate
 # Traffic Rules in Temporal Logic", IEEE IV 2020 (Table II). See README.md §4.
@@ -330,17 +329,3 @@ vo:
   enabled: true
   time_horizon: 3.0         # look-ahead [s]
   radius: 1.5               # combined vehicle radius [m]
-
-# =============================================================================
-# PART 4 — head-to-head race: baseline agent vs NeSy agent
-# =============================================================================
-race:
-  seeds: [2000, 2001, 2002, 2003, 2004, 2005]   # even count: start slots swap on alternate seeds
-  duration: 60              # race length [s] — longer than Part 1's episodes so there is room to pass
-  no_target_collisions: true   # the two CONTROLLED cars pass through each other (a rival must be
-                               # beaten by driving, not by being crashed into); background unchanged
-
-  horizon: 1000             # hard safety cap on steps per race
-  winner_metric: distance   # "distance" travelled, or "overtakes"
-  video_seconds: 30
-  sim: highway              # "highway" (Parts 1-2 models) or "metadrive"

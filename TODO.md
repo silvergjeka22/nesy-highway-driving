@@ -1,6 +1,6 @@
 # TODO — `nesy-highway-driving`
 
-Status tracker for the plan in [`README.md`](README.md). All four parts are implemented and
+Status tracker for the plan in [`README.md`](README.md). All three parts are implemented and
 runnable end-to-end; the open items are stretch goals.
 
 ---
@@ -20,7 +20,7 @@ runnable end-to-end; the open items are stretch goals.
 - [x] `evaluate` (crash / on-road / overtakes + diagnostics / return / length, live per-seed
       progress prints) + `plot_eval_comparison`.
 - [x] Best-model pick (lowest crash rate, then most overtakes) → `part1_best.zip` +
-      `part1_best.json` (Parts 2-4 read these).
+      `part1_best.json` (Parts 2-3 read these).
 - [x] `demo/demo.py`: standalone ≥30s MP4, offscreen, per-episode overtake prints, `[demo] OK/FAIL`.
 
 ### Part 2 — NeSy + XAI (highway-env)
@@ -46,12 +46,6 @@ runnable end-to-end; the open items are stretch goals.
 - [x] Setup: condacolab Python-3.10 primary path (one restart), GitHub-main build as the 3.12
       fallback; warning sources fixed by `pygame-ce` + `jupyter_client>=8.6.2` + removing `gym`.
 
-### Part 4 — race (capstone)
-- [x] Multi-agent race env (`controlled_vehicles=2`, longer `race.duration`).
-- [x] **Per-agent overtake counter** and **per-step per-rule violation accumulation** (was:
-      final-step only), start-slot swap on alternate seeds, shield-intervention rate for B.
-- [x] Scorecard (progress + crashes + violations together, never the winner alone) + race video.
-
 ### Infrastructure
 - [x] **Warnings fixed at the source** everywhere; `utils.silence_warnings` deleted, no
       `filterwarnings('ignore')` in the repo. pygame's `pkg_resources` import is blocked *before*
@@ -73,16 +67,13 @@ runnable end-to-end; the open items are stretch goals.
 - [ ] **Differentiable logic** — fuzzy / Łukasiewicz predicates as a smooth gradient signal.
 - [ ] **Symbolic distillation** — distil the policy into a human-readable rule set over the
       predicates, audited by the independent monitor.
-- [ ] Optional MetaDrive MARL race variant (Tier 2) on the Part-3 velocity + CBF/VO stack.
 
 ---
 
 ## 📝 Notes
-- **Run order:** Part 1 → Part 2 → Parts 3/4 (each loads the previous checkpoints from Drive).
+- **Run order:** Part 1 → Part 2 → Part 3 (each loads the previous checkpoints from Drive).
 - **Private repo:** notebooks clone via a GitHub token; push changes before re-running on Colab,
   since Colab runs the *cloned* `.py` files, not your local edits. The notebooks currently pull
   `BRANCH = "part3"` — switch to `main` after merging.
 - **Don't confound the comparison:** always count violations with the independent monitor, never
   the reward/shield the agent optimises.
-- **Shield intervention rate** is reported in the race; a high rate means the policy still
-  proposes unsafe manoeuvres the shield must veto.
