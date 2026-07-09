@@ -7,6 +7,7 @@ RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 
 def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
              env_fn=None, scene_fn=None):
+    """Run the model over multiple seeds and return summary metrics + per-episode rows."""
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
     env_fn = env_fn or (lambda c, render: create_environment(c, render=render))
     scene_fn = scene_fn or read_scene
@@ -32,6 +33,7 @@ def evaluate(model, cfg, seeds=None, apply_shield=False, count_violations=False,
 
 
 def sanity_rollout(model, cfg, tag="model", max_steps=1000):
+    """Quick rollout to verify the model drives sensibly. Prints overtakes and crashes."""
     from collections import Counter
 
     names = {0: "LANE_LEFT", 1: "IDLE", 2: "LANE_RIGHT", 3: "FASTER", 4: "SLOWER"}
@@ -62,6 +64,7 @@ def sanity_rollout(model, cfg, tag="model", max_steps=1000):
 
 
 def print_eval_progress(rows, seeds_done, seeds_total):
+    """Print a one-line progress update during evaluation."""
     n = len(rows)
     ot = sum(r["overtakes"] for r in rows)
     crashes = sum(1 for r in rows if r["crashed"])
@@ -71,6 +74,7 @@ def print_eval_progress(rows, seeds_done, seeds_total):
 
 def run_episode(model, env, seed, cfg, deterministic, apply_shield,
                 count_violations, scene_fn):
+    """Run one episode and return a dict with all metrics."""
     from nesy.roadmap import predicates, safety_shield, rule_violations
 
     obs, info = env.reset(seed=seed)
@@ -124,6 +128,7 @@ def run_episode(model, env, seed, cfg, deterministic, apply_shield,
 
 
 def summarise(rows, count_violations):
+    """Aggregate per-episode rows into mean/std summary statistics."""
     def ms(key):
         vals = np.array([r[key] for r in rows], dtype=float)
         return {"mean": float(vals.mean()), "std": float(vals.std())}
@@ -161,8 +166,10 @@ def summarise(rows, count_violations):
     return summary
 
 
-# Part 3 — MetaDrive evaluation
+# ---- Part 3: MetaDrive evaluation ------------------------------------------
+
 def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
+    """Evaluate a discrete model on MetaDrive via the Lab-1 bridge."""
     from envs.metadrive_factory import make_env_md
 
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
@@ -179,6 +186,7 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
 
 
 def run_nesy_md_episode(model, env, seed, cfg, shield):
+    """Run one MetaDrive episode through the bridge (manoeuvre -> cmd_vel -> CBF/VO)."""
     from envs.metadrive_factory import read_scene_md, nesy_md_action, count_passes_md
     from nesy.roadmap import predicates, rule_violations
 
@@ -222,13 +230,17 @@ def run_nesy_md_episode(model, env, seed, cfg, shield):
     }
 
 
-# Part 2 — rank NeSy methods
+# ---- Part 2: rank NeSy methods ---------------------------------------------
+
 def total_violation_rate(metrics):
+    """Sum of all per-rule violation rates."""
     rv = metrics["summary"].get("rule_violation_rate", {})
     return float(sum(rv.values()))
 
 
 def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
+    """Pick the NeSy config with fewest total violations that still overtakes.
+    Returns (best_name, comparison_table)."""
     names = list(metrics_by_name)
     baseline_key = baseline_key or names[0]
     base = metrics_by_name[baseline_key]["summary"]

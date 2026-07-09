@@ -1,30 +1,20 @@
-# =============================================================================
-# Single source of truth for ALL THREE PARTS (see README.md for the full plan).
-# Nothing is hard-coded in the .py modules — every quantity lives here.
-# Loaded once per notebook via utils.load_config().
-#
-#   Part 1 (baseline) ....... env, shaping, train, rppo, dqn, qrdqn, eval
-#   Part 2 (NeSy) ........... rules{}, fsm{}            -> nesy/ + labs/lab3,lab4
-#   Part 3 (MetaDrive) ...... metadrive{}, cbf{}, vo{}  -> envs/metadrive_factory + labs/lab1,2,5
-#
-# Rule parameters are taken from Maierhofer et al., "Formalization of Interstate
-# Traffic Rules in Temporal Logic", IEEE IV 2020 (Table II). See README.md §4.
-# =============================================================================
+# Single config for all THREE PARTS (see README.md).
+# Part 1 (baseline) — env, shaping, train, ppo, dqn, qrdqn, eval
+# Part 2 (NeSy)     — rules, fsm, finetune
+# Part 3 (MetaDrive) — metadrive, cbf, vo
+# Rule parameters: Maierhofer et al., IEEE IV 2020, Table II.
 
-# ---- Reproducibility ---------------------------------------------------------
 seed: 42
 eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
-# ---- Compute + logging (shared by all trainers) ------------------------------
-device: cpu           # small MLP policies — CPU is as fast as GPU here. ('auto'/'cuda' also work.)
-print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
+device: cpu
+print_freq: 200
 
-# ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:
   drive_root: /content/drive/MyDrive/nesy-highway-driving
-  checkpoints: checkpoints      # <root>/checkpoints/{ppo,dqn,ppo_nesy,md_ppo}.zip
-  videos: videos                # <root>/videos/*.mp4
-  metrics: metrics              # <root>/metrics/*.json (+ curves/<algo>/progress.csv, *.png)
+  checkpoints: checkpoints
+  videos: videos
+  metrics: metrics
 
 # =============================================================================
 # PART 1 — environment + baselines
@@ -42,290 +32,175 @@ env:
     action:
       type: DiscreteMetaAction
     lanes_count: 4
-    vehicles_count: 50        # DENSE traffic — much more to pass, harder gaps to judge (the
-                              # full-run setting, paired with train.total_timesteps 30k).
-                              # Drop to ~25 for quick sanity runs: fewer NPCs = faster stepping.
+    vehicles_count: 50
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
-    policy_frequency: 2        # 2 decisions/s. At 1 Hz the car gets ONE decision per second at
-                              # ~25 m/s closing speeds — collision avoidance is unlearnable and
-                              # the crash rate floors at ~100% no matter the penalty (measured).
-    simulation_frequency: 10   # quick-run: fewer physics substeps/step (raise to 15 for full)
+    policy_frequency: 2
+    simulation_frequency: 10
     collision_reward: -1.0
-    right_lane_reward: 0.0     # rewarding the rightmost lane biases AGAINST overtaking
-                              # (which happens on the left); drop it so all native reward = speed.
-    high_speed_reward: 0.5    # speed is the prerequisite for overtaking, but at 0.8 a crash-sprint
-                              # (~18 full-speed steps + ~2.7 passes ≈ +22) outearned the -9 crash
-                              # cost, so ALL THREE learners converged to "FASTER until impact"
-                              # (measured at 3k: 100% crash, 0 lane changes, argmax = FASTER only).
-                              # At 0.5 the sprint earns ~9+passes, the crash erases it, and
-                              # surviving-at-speed dominates (measured earlier with this value:
-                              # eval crash 0.30 at 8k) — braking / lane-changing to live becomes
-                              # the optimum the algorithms are asked to find.
+    right_lane_reward: 0.0
+    high_speed_reward: 0.5
     lane_change_reward: 0.0
-    reward_speed_range: [20, 30]   # floor AT the slowest target speed (20 m/s). ANTI-CAMPING:
-                              # cruising at traffic speed now pays ~0 speed reward, so "hide in
-                              # the left lane at 20 m/s" (measured: the 30k run's endpoint —
-                              # crash 35% but overtakes fell 6.6→0.9/100 steps) stops earning.
-                              # Only driving 25-30 m/s (which requires passing) pays. Braking to
-                              # dodge still pays 0 + survival_bonus and avoids the -9 crash, so
-                              # it stays rational; the old [15,30] paid 0.17/step just for
-                              # existing at 20, which funded the camping.
-    normalize_reward: false   # KEY aggression switch. true squashes the per-step reward into
-                              # [0,1] with a ~0.67 floor for merely existing, which makes "cruise
-                              # slowly, never risk a pass" the global optimum (measured: overtakes
-                              # DROP with more training). false pays speed only (~0.5/step at
-                              # 30 m/s, ~0 at 20 m/s), so getting ahead is the only way to earn —
-                              # the crash cost lives in shaping.collision_penalty below.
+    reward_speed_range: [20, 30]
+    normalize_reward: false
     offroad_terminal: true
     render_agent: true
     screen_width: 600
     screen_height: 150
     scaling: 5.5
 
-# Reward shaping (Part 1): make "get ahead" the dominant behaviour while keeping
-# crashing clearly worse than cruising. The baseline this produces is deliberately
-# AGGRESSIVE (many lane changes/passes) — Part 2 then shows the NeSy layer taming it.
 shaping:
   enabled: true
-  overtake_bonus: 7.0       # each car passed. THE aggression dial. Paired with the [20,30]
-                            # speed floor: camping now pays ~0.02/step (survival only), so a
-                            # single pass (+7) outearns a WHOLE 80-step safe episode — passing
-                            # is unambiguously the best strategy. Raw speed still pays little
-                            # (high_speed_reward 0.5) so this rewards the PASS event, not a
-                            # suicide sprint; the -9 crash cost still discourages reckless runs.
-                            # Expect crash to rise back above 50% (the overtakes-vs-safety
-                            # trade): drop toward 5.0 if crashes get out of hand, raise toward
-                            # 9.0 if it still under-passes.
-  lane_change_bonus: 1.0    # paid ONLY when a lane change escapes a blocked lane (slow leader
-                            # within 25 m) — the first link of the overtaking chain. Without any
-                            # bonus the policy never changes lanes (measured: 0 changes); a flat
-                            # any-change bonus gets farmed by spamming LANE_LEFT/RIGHT at the
-                            # road edge (also measured). The escape version can't be farmed: to
-                            # earn it again you must slot behind another slow car and pass it.
-                            # (highway-env's own lane_change_reward is dead config for highway-v0.)
-  survival_bonus: 0.02      # per step alive — a TIEBREAK, not an income: at 0.1 the guaranteed
-                            # 8/episode for merely existing matched the aggressive mode's return
-                            # and the policy converged to "hide at low speed, never pass" (measured).
-                            # 0.02 still makes braking-for-safety pay > 0 without funding cowardice.
-  blocked_penalty: 0.15     # per step stuck behind a close leader (within fsm.follow_gap).
-                            # Makes "sit passively behind traffic" the WORST legal state:
-                            # blocked-at-20 m/s earns 0.17+0.1-0.15 ≈ 0.12/step vs 0.27 free-slow
-                            # vs ~0.6 fast — so the policy escapes (lane change) or backs off.
-  offroad_penalty: 0.5      # leaving the road is clearly bad.
-  collision_penalty: 18.0   # one-off crash penalty (on top of the native -1). Must outweigh the
-                            # PASSES earned in a short sprint, not just the speed: with
-                            # overtake_bonus 7, a 2-pass sprint earns ~+20 gross, so at the old 8
-                            # (crash -9) crashing after 2 passes still NETTED +11 — the policy
-                            # crash-sprinted (measured: ep_len flat ~16, crash 100%, overtakes 12/
-                            # 100 steps). At 18 (crash -19) that sprint nets ~0, so passing-while-
-                            # crashing stops paying and the only positive strategy left is passing
-                            # WITHOUT crashing (camping already pays ~0 under the [20,30] floor).
-                            # THE safety dial: higher -> longer survival/fewer crashes, lower ->
-                            # more reckless. Pair it with overtake_bonus (the aggression dial).
+  overtake_bonus: 7.0         # aggression dial — each car passed
+  lane_change_bonus: 1.0      # paid only when escaping a blocked lane
+  survival_bonus: 0.02        # per-step tiebreak, not an income
+  blocked_penalty: 0.15       # per step stuck behind a close leader
+  offroad_penalty: 0.5
+  collision_penalty: 18.0     # must outweigh passes earned in a crash-sprint
 
-# The ONE training-budget switch — all three algorithms read it, so changing this
-# single number keeps the comparison fair by construction.
 train:
-  total_timesteps: 20000     # FULL run (all three algorithms read this one number).
-                             # 20k is the floor for a meaningful comparison — below it
-                             # the value-based learners collapse to a trivial always-
-                             # accelerate policy. Drop to 3000 only for a fast sanity check.
+  total_timesteps: 20000      # shared budget for all three algorithms
 
-ppo:                         # PPO (feed-forward, stable-baselines3) — the on-policy
-                             # policy-gradient baseline. Evaluated deterministically it scores
-                             # each observation independently, so it does not drift into a
-                             # single conservative action the way the PPO-LSTM did (its LSTM
-                             # state collapsed to all-SLOWER at eval — measured: 0 overtakes).
+ppo:
   policy: MlpPolicy
   learning_rate: 0.0005
-  n_steps: 512               # rollout length before each update (standard for a real run)
+  n_steps: 512
   batch_size: 256
   n_epochs: 10
-  gamma: 0.98                # 35-step (~18 s) horizon at 2 Hz: long enough to value "after this
-                             # pass comes open road and more passes" and to fear the crash that
-                             # ends all future reward. 0.95 (10 s) was too short for either.
+  gamma: 0.98
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.05             # exploration pressure at the START of training (SB3 default 0.0).
-                             # 0.03 flat was not enough (argmax collapsed to FASTER-only, 0 lane
-                             # changes) and 0.05 flat was too much (the trained argmax spams
-                             # LANE_LEFT/RIGHT forever — both measured at 3k). So it is SCHEDULED,
-                             # like DQN's ε: linear decay from here to ent_coef_final over the run.
-  ent_coef_final: 0.02       # end-of-training entropy floor: explore hard early, commit late but
-                             # keep a little stochasticity so the deterministic policy still
-                             # attempts passes instead of collapsing to a single safe action.
+  ent_coef: 0.05              # start of linear decay
+  ent_coef_final: 0.02        # end of linear decay
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
-    net_arch: [256, 256]     # same trunk as DQN/QR-DQN — comparable capacity
-
-dqn:                         # off-policy value-based baseline
-  policy: MlpPolicy
-  learning_rate: 0.00025          # lower LR curbs DQN's Q-value overestimation/collapse over the run
-  buffer_size: 50000
-  learning_starts: 500            # buffer seeding; 1000 wasted a third of a 3k run before any learning
-  batch_size: 128                 # steadier gradient estimates
-  gamma: 0.98                     # same horizon as RecurrentPPO — fair comparison
-  train_freq: 1                   # ONE gradient update per env step (was every 4): the -9 crash
-  gradient_steps: 1               # signal must propagate into Q while ε is still exploring, or the
-                                  # greedy policy reverts to FASTER-only (measured: lane_ch 7.3/ep
-                                  # at ε=0.7 collapsing to 2.6/ep at ε=0.1).
-  target_update_interval: 500     # 1000 gave only 3 target syncs in a 3k run — Q-targets too stale
-                                  # for the crash cost to ever reach the greedy action choice.
-  exploration_fraction: 0.6        # ε decays through 60% of the run: uniform-random tries of ALL
-                                   # five actions (lanes + speed) persist long enough for their
-                                   # Q-values to be grounded before the policy goes greedy
-  exploration_final_eps: 0.10      # retain some randomness so it can't commit to a crashing greedy policy
-  policy_kwargs:
     net_arch: [256, 256]
 
-qrdqn:                       # QR-DQN (sb3-contrib) — off-policy DISTRIBUTIONAL value learner:
-                             # models the full return distribution per action instead of the
-                             # mean, so the rare crash spike isn't averaged away — it can tell
-                             # "risky fast lane" from "safe fast lane" where DQN sees one number.
+dqn:
   policy: MlpPolicy
-  learning_rate: 0.00025          # same optimiser settings as DQN — the ONLY difference is
-  buffer_size: 50000              # the distributional head (fair ablation)
+  learning_rate: 0.00025
+  buffer_size: 50000
   learning_starts: 500
   batch_size: 128
   gamma: 0.98
-  train_freq: 1                   # matched to DQN (see comments there)
+  train_freq: 1
   gradient_steps: 1
   target_update_interval: 500
-  exploration_fraction: 0.6       # identical ε schedule to DQN
+  exploration_fraction: 0.6
   exploration_final_eps: 0.10
   policy_kwargs:
     net_arch: [256, 256]
-    n_quantiles: 50          # 50 quantiles of the return distribution (default 200 is
-                             # oversized for this small obs; 50 keeps the net comparable)
+
+qrdqn:
+  policy: MlpPolicy
+  learning_rate: 0.00025
+  buffer_size: 50000
+  learning_starts: 500
+  batch_size: 128
+  gamma: 0.98
+  train_freq: 1
+  gradient_steps: 1
+  target_update_interval: 500
+  exploration_fraction: 0.6
+  exploration_final_eps: 0.10
+  policy_kwargs:
+    net_arch: [256, 256]
+    n_quantiles: 50
 
 eval:
   episodes_per_seed: 5
   deterministic: true
-  video_episodes: 1          # episodes per video when no min length is requested
-  video_seconds: 30          # demo/demo.py records a clip at least this long
-  video_max_episodes: 60     # cap on episodes stitched together to reach video_seconds
-                             # (high enough that even DQN's short crashed episodes hit 30s)
+  video_episodes: 1
+  video_seconds: 30
+  video_max_episodes: 60
   video_fps: 10
 
-# NeSy-method selection band (Part 2, eval.evaluate.select_nesy_method): configs
-# whose overtakes stay within this fraction of the baseline's remain eligible.
-# (The Part-1 winner rule — most overtakes, tie -> distance, among models that
-# actually pass — lives in the notebook's pick cell.)
 select:
-  within_return_pct: 0.10    # 10% band below the baseline
+  within_return_pct: 0.10     # NeSy method selection band (Part 2)
 
 # =============================================================================
-# PART 2 — NeSy rules (predicates -> shield -> logic-shaped reward)
-# Parameter values from Maierhofer 2020, Table II (SI units). car_length and the
-# highway-env-scaled v_max are adapted to the simulator; everything else matches
-# the paper so each predicate is traceable to a formula. See README.md §4.
+# PART 2 — NeSy rules (Maierhofer 2020, Table II, SI units)
 # =============================================================================
 rules:
   enabled: true
-  car_length: 5.0           # vehicle length for gap geometry [m]
-  d_near: 10.0              # "near" longitudinal threshold [m]
+  car_length: 5.0             # vehicle length [m]
+  d_near: 10.0                # "near" threshold [m]
 
-  # --- RG1 safe distance / safe gap ---
-  t_d: 0.3                  # reaction/delay time [s]                 (Table II)
-  a_min_ego: -10.0         # max decel, ego [m/s^2]                  (Table II)
-  a_min_other: -10.5       # max decel, leader [m/s^2]               (Table II)
-  t_c: 3.0                 # cut-in observation window [s]           (Table II)
+  # RG1 safe distance
+  t_d: 0.3                   # reaction time [s]
+  a_min_ego: -10.0            # max decel, ego [m/s²]
+  a_min_other: -10.5          # max decel, leader [m/s²]
+  t_c: 3.0                   # cut-in window [s]
 
-  # --- RG2 unnecessary braking ---
-  a_abrupt: -2.0           # abrupt-braking accel threshold [m/s^2]  (Table II)
+  # RG2 unnecessary braking
+  a_abrupt: -2.0              # abrupt-braking threshold [m/s²]
   a_max_ego: 5.0
 
-  # --- RG3 speed limit ---
-  v_max: 25.0              # lane speed limit [m/s]. Below highway-env's 30 m/s top target
-                           # speed so "over the limit" is actually observable (the ego's
-                           # discrete target speeds are {20, 25, 30}).
-  v_su: 36.66              # suggested speed if no limit [m/s]        (Table II)
+  # RG3 speed limit
+  v_max: 25.0                 # lane speed limit [m/s]
+  v_su: 36.66                 # suggested speed [m/s]
 
-  # --- RG4 preserve flow ---
-  delta_v_fl: 4.0          # slow-driving margin below the limit [m/s]; ego at the 20 m/s
-                           # target (< v_max - delta_v_fl = 21) counts as impeding flow.
+  # RG4 preserve flow
+  delta_v_fl: 4.0             # slow-driving margin [m/s]
 
-  # --- RI1 no stopping ---
-  v_err: 0.01              # standstill tolerance [m/s]              (Table II)
-  v_stall: 18.0            # highway-env "near standstill": below the ego's slowest normal
-                           # target (20 m/s) it was forced to crawl — a forbidden near-stop
-                           # (highway-env never fully stops).
+  # RI1 no stopping
+  v_err: 0.01                 # standstill tolerance [m/s]
+  v_stall: 18.0               # near-standstill threshold [m/s]
 
-  # --- RI2 no passing on the right (exceptions: queue/slow/congestion) ---
-  v_con: 2.78              # congestion max velocity [m/s]           (Table II)
-  v_smt: 8.33              # slow-moving-traffic velocity [m/s]      (Table II)
-  v_qv: 16.67              # vehicle-queue velocity [m/s]            (Table II)
-  n_con: 3                 # min vehicles to count as congestion     (Table II)
-  slightly_higher_speed: 2.78   # tolerance for "only slightly faster" [m/s]
+  # RI2 no passing on the right
+  v_con: 2.78                 # congestion velocity [m/s]
+  v_smt: 8.33                 # slow-moving traffic [m/s]
+  v_qv: 16.67                # vehicle-queue velocity [m/s]
+  n_con: 3                   # min vehicles for congestion
+  slightly_higher_speed: 2.78 # tolerance [m/s]
 
-  # --- RI3 no U-turn / reverse ---
-  delta_theta_uturn: 1.57  # U-turn orientation threshold [rad]      (Table II)
+  # RI3 no U-turn
+  delta_theta_uturn: 1.57     # orientation threshold [rad]
 
-  # --- soft-heuristic penalty weights for the logic-shaped reward (Step C) ---
+  # Soft-rule penalty weights (logic-shaped reward, Step C)
   lambda:
-    RI2: 0.50              # passing on the right
-    RG4: 0.30              # impeding flow
-    RG2: 0.30              # abrupt braking
-    overtaken_accel: 0.20  # accelerating while being overtaken
+    RI2: 0.50
+    RG4: 0.30
+    RG2: 0.30
+    overtaken_accel: 0.20
 
-# Finite-state machine (Lab 3) — the symbolic manoeuvre layer / shield host.
 fsm:
   initial_state: CRUISE
   states: [CRUISE, FOLLOW, OVERTAKE_LEFT, MERGE, EMERGENCY_STOP]
-  follow_gap: 25.0          # below this leader gap -> FOLLOW [m]
-  emergency_gap: 8.0        # below this -> EMERGENCY_STOP [m]
+  follow_gap: 25.0            # FOLLOW trigger [m]
+  emergency_gap: 8.0          # EMERGENCY_STOP trigger [m]
 
-# Warm-start fine-tune for the logic-shaped reward (Step C). Lower LR, fewer
-# steps than Part 1 — the genuine "fine-tune". 20k is enough for the soft-rule
-# penalties (RI2/RG4/RG2) to visibly converge; 1000 was only ever a smoke run.
 finetune:
-  total_timesteps: 20000     # raise to ~60000 for the fullest fine-tune
+  total_timesteps: 20000
   learning_rate: 0.0001
 
 # =============================================================================
-# PART 3 — MetaDrive (continuous velocity action) + CBF / velocity obstacles
-# MetaDrive-specific APIs that were not available when writing are marked TODO
-# in envs/metadrive_factory.py and the labs.
+# PART 3 — MetaDrive + CBF / velocity obstacles
 # =============================================================================
 metadrive:
   enabled: true
-  map: "SSSS"               # straight segments (good for overtaking + racing)
-  traffic_density: 0.3      # more NPCs to pass than the old 0.2 (something to overtake)
+  map: "SSSS"
+  traffic_density: 0.3
   num_scenarios: 50
   horizon: 1000
-  # Continuous velocity action (Lab 1 cmd_vel): a = (v, omega).
-  v_max: 15.0               # max commandable linear speed [m/s]. Raised above the ~10 m/s
-                            # MetaDrive traffic so the ego can actually pull ahead and pass;
-                            # the FASTER step is 0.2*v_max, the ceiling scales with it.
-  omega_max: 0.6            # max angular speed [rad/s]
-  obs_speed_scale: 4.0      # multiply MetaDrive robot-scale speeds (~5 m/s) up to the
-                            # highway scale (~20 m/s) the policy was TRAINED on, so the
-                            # reconstructed observation lands in its learned regime and it
-                            # commits to overtakes instead of reading itself as stationary.
+  v_max: 15.0                 # max commandable speed [m/s]
+  omega_max: 0.6              # max angular speed [rad/s]
+  obs_speed_scale: 4.0        # MetaDrive->highway speed scaling
   lidar_num_lasers: 72
-  # Video (demo/demo_md.py): 3D chase camera on a GPU runtime, else CPU top-down.
-  video_seconds: 30         # clip length (>= 30 s required)
-  video_fps: 20             # MetaDrive steps ~ 10 Hz control; 20 fps keeps it smooth
-  video_size: [800, 800]    # camera window / top-down film size [px]
+  video_seconds: 30
+  video_fps: 20
+  video_size: [800, 800]
 
-# Control Barrier Function (Lab 5) — continuous safety filter on (v, omega).
-# Robot-scale thresholds (MetaDrive's (v, omega)); the RG1 barrier itself reuses the
-# scale-free SI safe_distance from rules{}, so it is identical to the discrete shield.
 cbf:
   enabled: true
-  gamma: 1.0                # class-K gain for the barrier: h_dot >= -gamma * h
-  v_max: 12.0               # RG3 legal speed limit [m/s]. Above MetaDrive traffic (~10) so
-                            # the SHIELDED ego can still pass, but below the 15 m/s action max
-                            # so the filter genuinely caps a reckless "go flat out" command.
-  v_min: 2.0               # RI1: no gratuitous standstill — keep at least this speed
-                            # unless RG1/off-road demand braking (safety overrides)
-  omega_max: 0.6            # steering-rate actuator limit [rad/s]
+  gamma: 1.0                  # barrier class-K gain
+  v_max: 12.0                 # RG3 speed limit [m/s]
+  v_min: 2.0                  # RI1 min speed [m/s]
+  omega_max: 0.6
 
-# Velocity Obstacles / RVO (Lab 4) — continuous safe-gap + fallback avoidance.
 vo:
   enabled: true
-  time_horizon: 3.0         # look-ahead [s]
-  radius: 1.5               # combined vehicle radius [m]
+  time_horizon: 3.0           # look-ahead [s]
+  radius: 1.5                 # combined vehicle radius [m]

@@ -8,6 +8,7 @@ from utils import curve_dir, drive_path
 
 
 def load_curve(cfg, tag):
+    """Load a training curve CSV into a DataFrame with standardised column names."""
     csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
         return None
@@ -23,6 +24,7 @@ def load_curve(cfg, tag):
 
 
 def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
+    """Plot reward, length, overtakes, lane changes, crash rate over training steps."""
     panels = [("rew", "mean episode reward"), ("len", "mean episode length"),
               ("overtakes", "overtakes per episode"),
               ("lane_changes", "lane changes per episode"), ("crash", "crash rate")]
@@ -49,6 +51,7 @@ def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
 
 
 def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
+    """Side-by-side bar chart comparing evaluation metrics across models."""
     names = list(metrics_by_name)
     panels = [
         ("crash_rate", lambda s: s["crash_rate"], None),
@@ -78,6 +81,7 @@ RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 
 
 def plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png"):
+    """Grouped bar chart of per-rule violation rates across configs."""
     names = list(metrics_by_name)
     fig, ax = plt.subplots(figsize=(10, 4.5))
     x = np.arange(len(RULES))

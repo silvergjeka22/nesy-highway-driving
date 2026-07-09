@@ -1,30 +1,23 @@
-"""Standalone demo: record an MP4 of a discrete policy driving MetaDrive via the labs.
-
-Runs OUTSIDE the notebook kernel and renders offscreen, so it never touches the
-kernel. The driver is a **discrete Part-1/Part-2 model run through the Lab-1 bridge**
-(reconstructed highway obs -> manoeuvre -> (v,ω)); ``--shield`` adds the FSM shield +
-CBF/VO filter on top.
+"""Record an MP4 of a discrete policy driving MetaDrive via the Lab-1 bridge (Part 3).
 
 Two views:
-  * ``--view 3d``      — 3D chase-camera via panda3d offscreen rendering (GPU runtime).
-  * ``--view topdown``  — top-down pygame view (CPU, works everywhere).
+  --view topdown  — 2D top-down (CPU, works everywhere)
+  --view 3d       — 3D chase-camera via panda3d offscreen (GPU runtime)
 
-Plays episodes until the clip is >= ``--seconds``, prints the overtakes per episode
-(the proof it passes traffic), encodes H.264, prints ``[demo] OK/FAIL``.
-
-    python demo/demo_md.py --model <Drive>/checkpoints/dqn.zip --algo dqn --shield
-    python demo/demo_md.py --model <ckpt> --algo dqn --view 3d
+Usage:
+    python demo/demo_md.py --model .../dqn.zip --algo dqn --view topdown
+    python demo/demo_md.py --model .../dqn.zip --algo dqn --view 3d
 """
 
 import os
 import sys
 import argparse
 
-os.environ.setdefault("SDL_AUDIODRIVER", "dummy")   # pygame: no audio device on headless
-os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # offscreen rendering, no display needed
-_xdg = os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/xdg-nesy")
 try:
-    os.makedirs(_xdg, mode=0o700, exist_ok=True)
+    os.makedirs("/tmp/xdg-nesy", mode=0o700, exist_ok=True)
 except OSError:
     pass
 
@@ -39,8 +32,7 @@ from envs.metadrive_factory import (  # noqa: E402
     make_env_md, nesy_md_action, count_passes_md, read_scene_md,
 )
 
-# torch compiled against numpy 1.x can't convert numpy 2.x arrays directly.
-# Patch th.as_tensor to fall back to Python-list conversion when this happens.
+# Patch torch for numpy 1.x/2.x cross-version compatibility.
 import torch as _th  # noqa: E402
 _orig_as_tensor = _th.as_tensor
 def _as_tensor_compat(data, dtype=None, device=None):
@@ -62,21 +54,15 @@ _th.Tensor.numpy = _tensor_numpy_compat
 
 
 def draw_telemetry(frame, v, omega, fsm_state=None):
-    """Print live telemetry onto one video frame; returns the annotated RGB array.
-
-    Top-left corner, white on black: the ego's current speed ``v`` [m/s], the
-    commanded yaw-rate ``omega`` [rad/s], and (when given) the FSM state. Pure
-    function on the pixel array — works for both the 3D chase-cam and the
-    top-down frames. PIL is already a dependency (imageio/matplotlib stack).
-    """
+    """Overlay speed, yaw-rate, and FSM state onto a video frame."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
     draw = ImageDraw.Draw(img)
     size = max(14, img.height // 30)
     try:
-        font = ImageFont.load_default(size=size)     # Pillow >= 10
-    except TypeError:                                 # older Pillow: fixed-size bitmap font
+        font = ImageFont.load_default(size=size)
+    except TypeError:
         font = ImageFont.load_default()
     text = f"v = {v:5.2f} m/s\nomega = {omega:+.2f} rad/s"
     if fsm_state:
@@ -89,7 +75,7 @@ def draw_telemetry(frame, v, omega, fsm_state=None):
 
 
 def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
-    """Drive ``env``, grab one frame per step via ``grab_frame(env, obs)``, print overtakes."""
+    """Drive env, grab frames, print overtakes per episode, save MP4."""
     target = int(min_seconds * fps)
     seed0 = int(cfg["eval_seeds"][0])
     frames = []
@@ -99,7 +85,7 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
         while len(frames) < target:
             obs, _ = env.reset(seed=seed0 + ep)
             fsm = cfg["fsm"]["initial_state"]
-            _, ahead = count_passes_md(env, set())     # prime the ahead-set
+            _, ahead = count_passes_md(env, set())
             done = False
             ot = steps = 0
             while not done and len(frames) < target:
@@ -110,8 +96,6 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
                 steps += 1
                 frame = grab_frame(env, obs)
                 if frame is not None:
-                    # Live telemetry on every frame: measured ego speed + the
-                    # commanded yaw-rate (the normalised action × omega_max).
                     frame = draw_telemetry(
                         frame, read_scene_md(env)["ego"]["v"],
                         float(action[1]) * cfg["metadrive"]["omega_max"],
@@ -130,12 +114,12 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
 
 
 def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
-    """Record the top-down pygame view (offscreen, CPU). Runs on any runtime."""
+    """Record the top-down 2D view (offscreen, CPU)."""
     md = cfg["metadrive"]
     size = tuple(md.get("video_size", [800, 800]))
     env = make_env_md(cfg, render=True, seed=int(cfg["eval_seeds"][0]))
 
-    def grab(env, obs):   # MetaDrive's top-down render(mode=...) lives on the base env
+    def grab(env, obs):
         return env.unwrapped.render(mode="top_down", window=False,
                                     screen_size=size, film_size=(size[0] * 2, size[1] * 2))
 
@@ -143,7 +127,7 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
 
 
 def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
-    """Record a 3D chase-camera video via MetaDrive's offscreen rendering pipeline."""
+    """Record a 3D chase-camera video via panda3d offscreen rendering."""
     md = cfg["metadrive"]
     env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
 
@@ -171,16 +155,14 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Record a MetaDrive driving video (discrete model via the Lab-1 bridge).")
-    ap.add_argument("--model", required=True, help="a discrete Part-1/Part-2 checkpoint (e.g. dqn.zip, part2_nesy.zip)")
-    ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn"], help="algorithm of the checkpoint")
-    ap.add_argument("--no-shield", action="store_true",
-                    help="drive WITHOUT the FSM shield + CBF/VO filter (default: shield on)")
-    ap.add_argument("--view", default="topdown", choices=["topdown", "3d"],
-                    help="3d = chase-camera via offscreen panda3d; topdown = 2D pygame (default)")
-    ap.add_argument("--out", default=None, help="output .mp4 path (default: alongside the model)")
-    ap.add_argument("--config", default="configs/highway.yaml", help="config YAML")
-    ap.add_argument("--seconds", type=float, default=None, help="min length (default: metadrive.video_seconds)")
+    ap = argparse.ArgumentParser(description="Record a MetaDrive video (discrete model via Lab-1 bridge).")
+    ap.add_argument("--model", required=True, help="discrete checkpoint (e.g. dqn.zip)")
+    ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn"])
+    ap.add_argument("--no-shield", action="store_true", help="disable FSM shield + CBF/VO filter")
+    ap.add_argument("--view", default="topdown", choices=["topdown", "3d"])
+    ap.add_argument("--out", default=None, help="output .mp4 path")
+    ap.add_argument("--config", default="configs/highway.yaml")
+    ap.add_argument("--seconds", type=float, default=None, help="min clip length")
     args = ap.parse_args()
 
     cfg_path = args.config if os.path.isabs(args.config) else os.path.join(_REPO, args.config)
@@ -189,7 +171,7 @@ def main():
     shield = not args.no_shield
     out_path = args.out or (os.path.splitext(args.model)[0] + "_metadrive.mp4")
 
-    print(f"loading {args.algo} model (Lab-1 bridge driver): {args.model}")
+    print(f"loading {args.algo} model (Lab-1 bridge): {args.model}")
     model = load_model(args.model, args.algo)
     print(f"recording >= {min_seconds:.0f}s (view={args.view}, shield={shield}) -> {out_path}")
 
@@ -202,7 +184,7 @@ def main():
     if size > 0:
         print(f"[demo] OK    {path}  ({size // 1024} KB)")
     else:
-        print(f"[demo] FAIL  {out_path}  (no file written or empty)")
+        print(f"[demo] FAIL  {out_path}  (no frames written)")
         sys.exit(1)
 
 

@@ -1,7 +1,8 @@
 import os
 import sys
 
-# block pkg_resources before gymnasium imports highway_env -> pygame
+# Block pkg_resources before gymnasium imports highway_env -> pygame,
+# preventing the DeprecationWarning at source.
 sys.modules.setdefault("pkg_resources", None)
 
 import numpy as np
@@ -10,6 +11,7 @@ import highway_env  # noqa: F401
 
 
 def ensure_render_backend():
+    """Set up an offscreen display (xvfb on Linux) for headless rendering."""
     import sys
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
@@ -25,6 +27,7 @@ def ensure_render_backend():
 
 
 def create_environment(cfg, render=False, seed=None, logic_reward=False):
+    """Build the highway-v0 env with overtake counting and reward shaping wrappers."""
     env_cfg = cfg["env"]
     render_config = dict(env_cfg["config"])
 
@@ -64,6 +67,7 @@ make_env = create_environment
 
 
 def read_scene(env):
+    """Extract ego + other vehicles as an SI-unit scene dict for the predicates."""
     u = env.unwrapped
     ego = u.vehicle
     lanes = u.config.get("lanes_count", 4)
@@ -91,6 +95,8 @@ def read_scene(env):
 
 
 class OvertakeCounter(gym.Wrapper):
+    """Track overtakes (ego passing a vehicle that was ahead) and lane changes per episode."""
+
     def __init__(self, env, blocked_gap=25.0):
         super().__init__(env)
         self.blocked_gap = float(blocked_gap)
@@ -139,6 +145,7 @@ class OvertakeCounter(gym.Wrapper):
         return idx[2] if idx else None
 
     def is_blocked(self):
+        """True if a slower vehicle is within blocked_gap ahead in the same lane."""
         ego = self.get_ego()
         if ego is None:
             return False
@@ -157,12 +164,14 @@ class OvertakeCounter(gym.Wrapper):
         return [v for v in self.env.unwrapped.road.vehicles if v is not ego]
 
     def currently_ahead(self):
+        """Set of vehicle ids currently ahead of ego (by x position)."""
         ego = self.get_ego()
         if ego is None:
             return set()
         return {id(v) for v in self.get_others() if v.position[0] > ego.position[0]}
 
     def update_overtakes(self):
+        """Count vehicles that were ahead but are now behind (ego passed them)."""
         ego = self.get_ego()
         if ego is None:
             return
@@ -188,6 +197,8 @@ class OvertakeCounter(gym.Wrapper):
 
 
 class RewardShapingWrapper(gym.Wrapper):
+    """Add overtake bonus, crash penalty, and other shaping terms to the native reward."""
+
     def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0,
                  lane_change_bonus=0.0, survival_bonus=0.0, blocked_penalty=0.0):
         super().__init__(env)
@@ -227,6 +238,9 @@ class RewardShapingWrapper(gym.Wrapper):
 
 
 class LogicRewardWrapper(gym.Wrapper):
+    """Subtract a logic penalty (sum of weighted rule violations) from the reward.
+    Used during the Part-2 fine-tune to teach the policy to respect soft rules."""
+
     def __init__(self, env, cfg):
         super().__init__(env)
         self.cfg = cfg

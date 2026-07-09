@@ -7,11 +7,13 @@ import yaml
 
 
 def load_config(path):
+    """Load the YAML config file that holds all hyperparameters and paths."""
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
 def set_global_seeds(seed):
+    """Pin Python, NumPy and PyTorch RNGs for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -25,6 +27,7 @@ def set_global_seeds(seed):
 
 
 def drive_path(cfg, key, *parts):
+    """Build an absolute path under the Drive results root, creating parents."""
     root = cfg["paths"]["drive_root"]
     sub = cfg["paths"][key]
     path = os.path.join(root, sub, *parts)
@@ -33,12 +36,14 @@ def drive_path(cfg, key, *parts):
 
 
 def curve_dir(cfg, tag):
+    """Return (and create) the directory for a training curve CSV."""
     d = os.path.join(cfg["paths"]["drive_root"], cfg["paths"]["metrics"], "curves", tag)
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def save_mp4(frames, path, fps=10):
+    """Encode a list of RGB arrays into an H.264 MP4. Pads to mod-16 for codec."""
     import imageio
 
     if not frames:
@@ -72,6 +77,7 @@ def save_mp4(frames, path, fps=10):
 
 
 def stitch_videos_grid(video_paths, path, fps=10, cols=None, downscale=2):
+    """Combine multiple MP4s into a labelled side-by-side grid video."""
     import imageio
 
     clips, names = [], []
@@ -128,6 +134,7 @@ def stitch_videos_grid(video_paths, path, fps=10, cols=None, downscale=2):
 
 
 def save_json(obj, path):
+    """Write a dict to JSON, converting numpy types automatically."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
         json.dump(obj, f, indent=2, default=json_default)
@@ -135,6 +142,7 @@ def save_json(obj, path):
 
 
 def json_default(o):
+    """JSON serializer fallback for numpy scalars and arrays."""
     if isinstance(o, (np.floating,)):
         return float(o)
     if isinstance(o, (np.integer,)):
