@@ -24,30 +24,31 @@ def load_curve(cfg, tag):
 
 
 def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
-    """Plot reward, length, overtakes, lane changes, crash rate over training steps."""
-    panels = [("rew", "mean episode reward"), ("len", "mean episode length"),
-              ("overtakes", "overtakes per episode"),
-              ("lane_changes", "lane changes per episode"), ("crash", "crash rate")]
-    fig, axes = plt.subplots(2, 3, figsize=(16, 7))
-    for tag in tags:
-        df = load_curve(cfg, tag)
-        if df is None or df.empty:
-            continue
-        for ax, (col, _) in zip(axes.flat, panels):
+    """Plot reward, length, overtakes, lane changes, crash rate — one figure each."""
+    panels = [("rew", "Mean Episode Reward"), ("len", "Mean Episode Length"),
+              ("overtakes", "Overtakes per Episode"),
+              ("lane_changes", "Lane Changes per Episode"), ("crash", "Crash Rate")]
+    curves = {tag: load_curve(cfg, tag) for tag in tags}
+    figs = []
+    for col, title in panels:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        for tag in tags:
+            df = curves[tag]
+            if df is None or df.empty:
+                continue
             d = df[["t", col]].dropna().sort_values("t")
-            ax.plot(d["t"], d[col], marker=".", label=tag.upper())
-    for ax, (col, title) in zip(axes.flat, panels):
+            ax.plot(d["t"], d[col], marker=".", markersize=3, label=tag.upper())
         ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
         if col == "crash":
             ax.set_ylim(0.0, 1.05)
         ax.grid(alpha=0.3)
         ax.legend()
-    for ax in axes.flat[len(panels):]:
-        ax.axis("off")
-    fig.tight_layout()
-    if save:
-        fig.savefig(drive_path(cfg, "metrics", "training_curves.png"), dpi=120, bbox_inches="tight")
-    return fig
+        fig.tight_layout()
+        if save:
+            fig.savefig(drive_path(cfg, "metrics", f"training_{col}.png"),
+                        dpi=120, bbox_inches="tight")
+        figs.append(fig)
+    return figs
 
 
 def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
