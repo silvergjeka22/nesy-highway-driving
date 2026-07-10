@@ -76,8 +76,9 @@ def save_mp4(frames, path, fps=10):
     return path
 
 
-def stitch_videos_grid(video_paths, path, fps=10, cols=None, downscale=2):
-    """Combine multiple MP4s into a labelled side-by-side grid video."""
+def stitch_videos_grid(video_paths, path, fps=10, cols=None, gap=6,
+                       banner_h=40):
+    """Combine multiple MP4s into a labelled grid video at full resolution."""
     import imageio
 
     clips, names = [], []
@@ -90,7 +91,7 @@ def stitch_videos_grid(video_paths, path, fps=10, cols=None, downscale=2):
         frames = []
         for i in range(n_read):
             try:
-                frames.append(np.asarray(reader.get_data(i))[::downscale, ::downscale, :3])
+                frames.append(np.asarray(reader.get_data(i))[:, :, :3])
             except (IndexError, RuntimeError):
                 break
         reader.close()
@@ -105,30 +106,57 @@ def stitch_videos_grid(video_paths, path, fps=10, cols=None, downscale=2):
     w = max(c[0].shape[1] for c in clips)
     T = max(len(c) for c in clips)
     rows = (len(clips) + cols - 1) // cols
+    tile_h = banner_h + h
 
-    def label(img, text):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
         try:
-            from PIL import Image, ImageDraw
-        except ImportError:
-            return img
-        im = Image.fromarray(img)
+            font = ImageFont.load_default(size=max(20, banner_h // 2))
+        except TypeError:
+            font = ImageFont.load_default()
+        _has_pil = True
+    except ImportError:
+        _has_pil = False
+
+    def make_banner(text, width):
+        if not _has_pil:
+            b = np.zeros((banner_h, width, 3), np.uint8)
+            return b
+        im = Image.new("RGB", (width, banner_h), (30, 30, 30))
         d = ImageDraw.Draw(im)
-        d.rectangle([0, 0, 14 + 8 * len(text), 22], fill=(0, 0, 0))
-        d.text((7, 5), text, fill=(255, 255, 255))
+        bbox = d.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        d.text(((width - tw) // 2, (banner_h - th) // 2), text,
+               fill=(255, 255, 255), font=font)
         return np.asarray(im)
 
-    def tile(clip, t, name):
+    banners = [make_banner(n.upper(), w) for n in names]
+    blank_banner = np.zeros((banner_h, w, 3), np.uint8)
+
+    def tile(clip, t, idx):
         f = clip[min(t, len(clip) - 1)]
         out = np.zeros((h, w, 3), np.uint8)
         out[: f.shape[0], : f.shape[1]] = f
-        return label(out, name.upper())
+        return np.vstack([banners[idx], out])
 
-    blank = np.zeros((h, w, 3), np.uint8)
+    blank = np.zeros((tile_h, w, 3), np.uint8)
+    gap_v = np.full((tile_h, gap, 3), 40, np.uint8)
+    gap_h = np.full((gap, cols * w + (cols - 1) * gap, 3), 40, np.uint8)
+
     grid_frames = []
     for t in range(T):
-        tiles = [tile(c, t, n) for c, n in zip(clips, names)]
+        tiles = [tile(c, t, i) for i, (c, n) in enumerate(zip(clips, names))]
         tiles += [blank] * (rows * cols - len(tiles))
-        grid = np.vstack([np.hstack(tiles[r * cols:(r + 1) * cols]) for r in range(rows)])
+        row_imgs = []
+        for r in range(rows):
+            row_tiles = tiles[r * cols:(r + 1) * cols]
+            row_img = row_tiles[0]
+            for rt in row_tiles[1:]:
+                row_img = np.hstack([row_img, gap_v, rt])
+            row_imgs.append(row_img)
+        grid = row_imgs[0]
+        for ri in row_imgs[1:]:
+            grid = np.vstack([grid, gap_h, ri])
         grid_frames.append(grid)
     return save_mp4(grid_frames, path, fps=fps)
 
