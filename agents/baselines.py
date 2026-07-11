@@ -73,6 +73,8 @@ class ProgressPrinter(BaseCallback):
         self.track_violations = track_violations
         self._viol_counts = {r: 0 for r in self.VIOL_RULES}
         self._viol_steps = 0
+        self._cum_viol_counts = {r: 0 for r in self.VIOL_RULES}
+        self._cum_viol_steps = 0
         self._best_compliance = -1.0
 
     def _on_training_start(self):
@@ -96,8 +98,11 @@ class ProgressPrinter(BaseCallback):
                 self.total_overtakes += int(ep.get("overtakes", 0))
             if self.track_violations:
                 for r in self.VIOL_RULES:
-                    self._viol_counts[r] += int(info.get(f"viol_{r}", 0))
+                    v = int(info.get(f"viol_{r}", 0))
+                    self._viol_counts[r] += v
+                    self._cum_viol_counts[r] += v
                 self._viol_steps += 1
+                self._cum_viol_steps += 1
 
         if self.num_timesteps >= self.next_print:
             self.next_print += self.print_freq
@@ -130,14 +135,15 @@ class ProgressPrinter(BaseCallback):
                 compliance = None
                 viol_str = ""
                 if self.track_violations and self._viol_steps > 0:
-                    mean_viol = sum(self._viol_counts[vr] / self._viol_steps
-                                   for vr in self.VIOL_RULES) / len(self.VIOL_RULES)
-                    compliance = round(1.0 - mean_viol, 3)
                     parts = [f"{vr} {self._viol_counts[vr]/self._viol_steps:.0%}"
                              for vr in self.VIOL_RULES]
                     viol_str = " | " + " ".join(parts)
                     self._viol_counts = {vr: 0 for vr in self.VIOL_RULES}
                     self._viol_steps = 0
+                if self.track_violations and self._cum_viol_steps > 0:
+                    mean_viol = sum(self._cum_viol_counts[vr] / self._cum_viol_steps
+                                   for vr in self.VIOL_RULES) / len(self.VIOL_RULES)
+                    compliance = round(1.0 - mean_viol, 3)
 
                 flag = ""
                 if self.best_path is not None:
