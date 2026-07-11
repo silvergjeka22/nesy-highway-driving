@@ -31,9 +31,9 @@ for step in range(300):
     passed, ahead = count_passes_md(env, ahead)
     overtakes += passed
 
-    lat = bridge.get("lane_change")
-    if lat is not None:
-        phase = f"LANE->{lat['y_target']:+.1f}"
+    tgt = bridge.get("target_lane")
+    if tgt is not None:
+        phase = f"LANE->{tgt}"
     elif ego["v"] < 0.6 * md["v_max"]:
         phase = "WARMUP"
     else:

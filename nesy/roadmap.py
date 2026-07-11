@@ -48,8 +48,22 @@ def predicates(scene, cfg):
 
 
 def nearest_leader(ego, others, max_dx=None):
-    """Nearest vehicle ahead in the same lane (or None)."""
-    cand = [o for o in others if o.get("lane") == ego.get("lane") and o["x"] > ego["x"]]
+    """Nearest vehicle ahead in the ego's path (or None).
+
+    In the path = same lane label, or laterally overlapping now or within 1 s
+    (projected with relative lateral velocity — catches cut-ins and straddlers,
+    whose lane label only flips halfway across).
+    """
+    def in_path(o):
+        if o.get("lane") == ego.get("lane"):
+            return True
+        dy = o.get("y", 0.0) - ego.get("y", 0.0)
+        dy_1s = dy + (o.get("vy", 0.0) - ego.get("vy", 0.0)) * 1.0
+        # A yawed car's nose/tail sticks out laterally beyond its centre.
+        yaw_extent = 2.5 * min(1.0, abs(o.get("heading", 0.0) - ego.get("heading", 0.0)))
+        return min(abs(dy), abs(dy_1s)) - yaw_extent < 2.0
+
+    cand = [o for o in others if o["x"] > ego["x"] and in_path(o)]
     if max_dx is not None:
         cand = [o for o in cand if (o["x"] - ego["x"]) <= max_dx]
     return min(cand, key=lambda o: o["x"] - ego["x"]) if cand else None
@@ -86,7 +100,9 @@ def safe_gap(ego, others, side, cfg):
 
 
 def scene_lanes(cfg, ego):
-    """Number of lanes from env config."""
+    """Number of lanes: from the scene when known (MetaDrive), else env config."""
+    if ego.get("lanes_count"):
+        return int(ego["lanes_count"])
     return cfg.get("env", {}).get("config", {}).get("lanes_count", 4)
 
 

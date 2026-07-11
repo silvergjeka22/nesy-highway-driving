@@ -146,63 +146,96 @@ def scene_to_lidar(scene, n_lasers=72, max_range=50.0):
     return ranges
 
 
-def _lane_change_omega(ego, y_target, omega_max):
-    """Closed-loop lateral controller: steer toward the target lane centre.
+def _road_clear_ahead(scene, dist=25.0):
+    """True if no vehicle sits within `dist` m ahead of the ego (any lane nearby)."""
+    e = scene["ego"]
+    return not any(0.0 < o["x"] - e["x"] < dist and abs(o["y"] - e["y"]) < 2.0
+                   for o in scene.get("others", []))
 
-    Returns the omega command, or None once the lane change is complete
-    (on the lane centre and heading realigned with the road).
+
+def _lane_blocked(scene, ego, y_centre):
+    """True if a car occupies the slot beside the ego in that lane, or a faster
+    car behind would reach it (rear window widens with closing speed)."""
+    for o in scene.get("others", []):
+        if abs(o["y"] - y_centre) >= 1.8:
+            continue
+        dx = o["x"] - ego["x"]
+        closing = max(0.0, o.get("vx", 0.0) - ego.get("vx", 0.0))
+        if -6.0 - 2.0 * closing < dx < 10.0:
+            return True
+    return False
+
+
+def _steer_to_lane(ego, y_target, omega_max):
+    """Closed-loop lateral controller: steer toward a lane-centre y.
+
+    Commands a bounded lateral speed, so the crossing rate (and overshoot)
+    stays the same at any forward speed.
     """
     y_err = y_target - ego["y"]
+    v = max(ego.get("v", 1.0), 1.0)
+    vy_des = float(np.clip(0.8 * y_err, -2.5, 2.5))
+    heading_des = float(np.clip(vy_des / v, -0.35, 0.35))
     heading = ego.get("heading", 0.0)
-    if abs(y_err) < 0.3 and abs(heading) < 0.10:
-        return None
-    heading_des = float(np.clip(0.35 * y_err, -0.35, 0.35))
     return float(np.clip(2.5 * (heading_des - heading), -omega_max, omega_max))
 
 
 def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
     """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge.
 
+    The model picks the manoeuvre; the bridge executes it like highway-env's
+    low-level controller: it always tracks a target lane centre (lane keeping),
+    and a lane change latches the adjacent lane index until reached.
+
     Args:
-        bridge: mutable dict holding the in-progress lane-change latch.
-                Pass ``{}`` on the first call and reuse across steps.
+        bridge: mutable dict holding the lane-change latch. Pass ``{}`` on the
+                first call and reuse across steps.
 
     Returns (action, fsm_state).
     """
-    from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS
+    from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS, ACTION_INDEX
     from labs.lab1_cmd_vel import manoeuvre_to_cmd_vel
 
     scene = read_scene_md(env)
     md = cfg["metadrive"]
     ego = scene["ego"]
+    centres = ego.get("lane_centres") or []
+    lane = min(ego.get("lane", 0), max(len(centres) - 1, 0))
     v_cruise = 0.6 * md["v_max"]
-    lat = bridge.get("lane_change") if bridge is not None else None
+    target = bridge.get("target_lane") if bridge is not None else None
+    if target is not None and centres:
+        if abs(centres[target] - ego["y"]) < 0.3:
+            bridge.pop("target_lane", None)  # lane change complete
+            target = None
+        elif _lane_blocked(scene, ego, centres[target]):
+            bridge.pop("target_lane", None)  # target slot occupied: abort, fall back
+            target = None
 
-    if lat is not None:
+    if target is not None:
         manoeuvre = "IDLE"  # hold speed while the lane change completes
-    elif ego["v"] < v_cruise:
+    elif ego["v"] < v_cruise and _road_clear_ahead(scene):
         manoeuvre = "FASTER"  # warmup: reach the speed range the model was trained at
     else:
         a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
                                    deterministic=cfg["eval"].get("deterministic", True))
         manoeuvre = ACTIONS[int(a)]
-        if shield:
-            idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
-            manoeuvre = ACTIONS[idx]
-        if manoeuvre in ("LANE_LEFT", "LANE_RIGHT") and bridge is not None:
-            direction = 1.0 if manoeuvre == "LANE_LEFT" else -1.0  # +y is left in MetaDrive
-            lat = {"y_target": ego["y"] + direction * ego.get("lane_width", 3.5), "steps": 0}
-            bridge["lane_change"] = lat
 
-    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
-    if lat is not None:
-        w = _lane_change_omega(ego, lat["y_target"], md["omega_max"])
-        lat["steps"] += 1
-        if w is None or lat["steps"] > 40:  # done (or give up: blocked/vetoed too long)
-            bridge.pop("lane_change", None)
-            omega = 0.0
+    if shield:  # FSM shield vets every manoeuvre, warmup and latch included
+        idx, fsm_state = safety_shield(ACTION_INDEX[manoeuvre], predicates(scene, cfg),
+                                       fsm_state, cfg)
+        manoeuvre = ACTIONS[idx]
+    if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
+        cand = lane + (-1 if manoeuvre == "LANE_LEFT" else 1)  # left = lower index (+y)
+        if (0 <= cand < len(centres) and bridge is not None
+                and not _lane_blocked(scene, ego, centres[cand])):
+            bridge["target_lane"] = target = cand
         else:
-            omega = w
+            manoeuvre = "IDLE"  # no such lane / slot occupied: never steer into it
+
+    v, _ = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
+    # Lateral control is always closed-loop on the target (or current) lane centre.
+    y_ref = centres[target if target is not None else lane] if centres else ego["y"]
+    omega = _steer_to_lane(ego, y_ref, md["omega_max"])
     if shield:
         lidar = scene_to_lidar(scene, md.get("lidar_num_lasers", 72))
         (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
@@ -236,13 +269,20 @@ def read_scene_md(env):
     if on_road is None:
         on_road = not getattr(ego, "out_of_road", False)
     ego_d["on_road"] = bool(on_road)
+    # Real road geometry: lane-centre y of every lane at the ego's position.
+    # Lane index 0 is the leftmost (largest y); +y is left.
     try:
-        ego_d["lane_width"] = float(ego.lane.width)
+        ref = ego.navigation.current_ref_lanes
+        pos = ego.position
+        ego_d["lane_centres"] = [float(l.position(l.local_coordinates(pos)[0], 0)[1])
+                                 for l in ref]
+        ego_d["lanes_count"] = len(ref)
     except Exception:
-        ego_d["lane_width"] = 3.5
+        ego_d["lane_centres"] = []
 
     others = [vinfo(o) for o in _neighbours(u, ego)]
-    return {"ego": ego_d, "others": others, "lanes_count": int(getattr(u, "num_lanes", 3) or 3)}
+    return {"ego": ego_d, "others": others,
+            "lanes_count": int(ego_d.get("lanes_count", 3))}
 
 
 def _neighbours(u, ego):

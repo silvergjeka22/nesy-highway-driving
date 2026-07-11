@@ -29,16 +29,14 @@ def manoeuvre_to_cmd_vel(manoeuvre, scene, cfg):
     v_max = md["v_max"]
     omega_max = md["omega_max"]
     v_cur = scene["ego"].get("v", 0.0)
-    v_cruise = 0.6 * v_max
-    v_base = max(v_cur, v_cruise)
 
     dv = 0.2 * v_max  # speed step per FASTER/SLOWER
     table = {
-        "IDLE": (v_base, 0.0),
-        "FASTER": (v_base + dv, 0.0),
-        "SLOWER": (v_base - dv, 0.0),
-        "LANE_LEFT": (v_base, +omega_max),
-        "LANE_RIGHT": (v_base, -omega_max),
+        "IDLE": (v_cur, 0.0),
+        "FASTER": (v_cur + dv, 0.0),
+        "SLOWER": (v_cur - dv, 0.0),
+        "LANE_LEFT": (v_cur, +omega_max),
+        "LANE_RIGHT": (v_cur, -omega_max),
     }
     v, omega = table.get(manoeuvre, (v_cur, 0.0))
     v = float(max(0.0, min(v, v_max)))

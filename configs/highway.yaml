@@ -187,7 +187,7 @@ finetune:
 # =============================================================================
 metadrive:
   enabled: true
-  map: "SSSS"
+  map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
   traffic_density: 0.15
   num_scenarios: 50
   horizon: 1000
@@ -205,7 +205,7 @@ cbf:
   enabled: true
   gamma: 1.0                  # barrier class-K gain
   v_max: 12.0                 # RG3 speed limit [m/s]
-  v_min: 4.0                  # RI1 min speed [m/s]
+  v_min: 2.0                  # RI1 min speed [m/s] — low enough to yield in a squeeze
   omega_max: 0.6
 
 vo:
