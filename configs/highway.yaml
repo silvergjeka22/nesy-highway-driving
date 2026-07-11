@@ -196,7 +196,6 @@ metadrive:
   max_steer: 0.3              # cap steering fraction (1.0 = full lock)
   obs_speed_scale: 4.0        # MetaDrive->highway speed scaling
   obs_x_offset: 175.0         # align ego x with highway-env start (~180 m)
-  lc_cooldown: 12             # steps to hold after a lane change
   lidar_num_lasers: 72
   video_seconds: 30
   video_fps: 20

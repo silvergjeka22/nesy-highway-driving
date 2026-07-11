@@ -146,11 +146,25 @@ def scene_to_lidar(scene, n_lasers=72, max_range=50.0):
     return ranges
 
 
+def _lane_change_omega(ego, y_target, omega_max):
+    """Closed-loop lateral controller: steer toward the target lane centre.
+
+    Returns the omega command, or None once the lane change is complete
+    (on the lane centre and heading realigned with the road).
+    """
+    y_err = y_target - ego["y"]
+    heading = ego.get("heading", 0.0)
+    if abs(y_err) < 0.3 and abs(heading) < 0.10:
+        return None
+    heading_des = float(np.clip(0.35 * y_err, -0.35, 0.35))
+    return float(np.clip(2.5 * (heading_des - heading), -omega_max, omega_max))
+
+
 def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
     """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge.
 
     Args:
-        bridge: mutable dict for warmup / lane-change cooldown state.
+        bridge: mutable dict holding the in-progress lane-change latch.
                 Pass ``{}`` on the first call and reuse across steps.
 
     Returns (action, fsm_state).
@@ -160,29 +174,36 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
 
     scene = read_scene_md(env)
     md = cfg["metadrive"]
-    ego_v = scene["ego"]["v"]
+    ego = scene["ego"]
     v_cruise = 0.6 * md["v_max"]
+    lat = bridge.get("lane_change") if bridge is not None else None
 
-    if ego_v < v_cruise:
-        manoeuvre = "FASTER"
+    if lat is not None:
+        manoeuvre = "IDLE"  # hold speed while the lane change completes
+    elif ego["v"] < v_cruise:
+        manoeuvre = "FASTER"  # warmup: reach the speed range the model was trained at
     else:
-        cooldown = 0 if bridge is None else bridge.get("lc_cd", 0)
         a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
                                    deterministic=cfg["eval"].get("deterministic", True))
         manoeuvre = ACTIONS[int(a)]
         if shield:
             idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
             manoeuvre = ACTIONS[idx]
-        if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
-            if cooldown > 0:
-                manoeuvre = "IDLE"
-            elif bridge is not None:
-                bridge["lc_cd"] = int(md.get("lc_cooldown", 12))
-        if bridge is not None and cooldown > 0:
-            bridge["lc_cd"] = cooldown - 1
+        if manoeuvre in ("LANE_LEFT", "LANE_RIGHT") and bridge is not None:
+            direction = 1.0 if manoeuvre == "LANE_LEFT" else -1.0  # +y is left in MetaDrive
+            lat = {"y_target": ego["y"] + direction * ego.get("lane_width", 3.5), "steps": 0}
+            bridge["lane_change"] = lat
 
     v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
-    if shield and ego_v >= v_cruise:
+    if lat is not None:
+        w = _lane_change_omega(ego, lat["y_target"], md["omega_max"])
+        lat["steps"] += 1
+        if w is None or lat["steps"] > 40:  # done (or give up: blocked/vetoed too long)
+            bridge.pop("lane_change", None)
+            omega = 0.0
+        else:
+            omega = w
+    if shield:
         lidar = scene_to_lidar(scene, md.get("lidar_num_lasers", 72))
         (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
     return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
@@ -215,6 +236,10 @@ def read_scene_md(env):
     if on_road is None:
         on_road = not getattr(ego, "out_of_road", False)
     ego_d["on_road"] = bool(on_road)
+    try:
+        ego_d["lane_width"] = float(ego.lane.width)
+    except Exception:
+        ego_d["lane_width"] = 3.5
 
     others = [vinfo(o) for o in _neighbours(u, ego)]
     return {"ego": ego_d, "others": others, "lanes_count": int(getattr(u, "num_lanes", 3) or 3)}
