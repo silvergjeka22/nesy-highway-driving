@@ -188,7 +188,7 @@ finetune:
 metadrive:
   enabled: true
   map: "SSSS"
-  traffic_density: 0.3
+  traffic_density: 0.15
   num_scenarios: 50
   horizon: 1000
   v_max: 15.0                 # max commandable speed [m/s]
