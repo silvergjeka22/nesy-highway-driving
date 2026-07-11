@@ -99,7 +99,6 @@ def kin_obs_from_scene(scene, cfg):
     max_v = 40.0
     lanes = cfg["env"]["config"].get("lanes_count", 4)
     vscale = float(cfg.get("metadrive", {}).get("obs_speed_scale", 1.0))
-    xscale = vscale
     rng = {"x": (-5 * max_v, 5 * max_v), "y": (-4.0 * lanes, 4.0 * lanes),
            "vx": (-2 * max_v, 2 * max_v), "vy": (-2 * max_v, 2 * max_v)}
 
@@ -112,7 +111,7 @@ def kin_obs_from_scene(scene, cfg):
     def make_row(vd, relative):
         bx, by, bvx, bvy = (ego["x"], ego["y"], ego["vx"], ego["vy"]) if relative else (0.0, 0.0, 0.0, 0.0)
         full = {"presence": 1.0,
-                "x": nz((vd["x"] - bx) * xscale, "x"), "y": nz((vd["y"] - by) * xscale, "y"),
+                "x": nz((vd["x"] - bx), "x"), "y": nz((vd["y"] - by), "y"),
                 "vx": nz((vd["vx"] - bvx) * vscale, "vx"), "vy": nz((vd["vy"] - bvy) * vscale, "vy")}
         return [full[f] for f in feats]
 
