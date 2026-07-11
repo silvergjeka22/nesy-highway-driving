@@ -53,7 +53,10 @@ class ProgressPrinter(BaseCallback):
     """Print training progress: reward, episode length, overtakes, crash rate.
     Also saves the best checkpoint by reward and logs metrics to CSV."""
 
-    def __init__(self, tag, print_freq=200, best_path=None, total_steps=None):
+    VIOL_RULES = ("RI2", "RG4", "RG2")
+
+    def __init__(self, tag, print_freq=200, best_path=None, total_steps=None,
+                 track_violations=False):
         super().__init__()
         self.tag = tag
         self.print_freq = max(1, int(print_freq))
@@ -67,6 +70,10 @@ class ProgressPrinter(BaseCallback):
         self.t0 = None
         self.start_step = 0
         self.next_print = self.print_freq
+        self.track_violations = track_violations
+        self._viol_counts = {r: 0 for r in self.VIOL_RULES}
+        self._viol_steps = 0
+        self._best_compliance = -1.0
 
     def _on_training_start(self):
         self.t0 = time.time()
@@ -87,6 +94,10 @@ class ProgressPrinter(BaseCallback):
             ep = info.get("episode")
             if ep is not None:
                 self.total_overtakes += int(ep.get("overtakes", 0))
+            if self.track_violations:
+                for r in self.VIOL_RULES:
+                    self._viol_counts[r] += int(info.get(f"viol_{r}", 0))
+                self._viol_steps += 1
 
         if self.num_timesteps >= self.next_print:
             self.next_print += self.print_freq
@@ -108,17 +119,49 @@ class ProgressPrinter(BaseCallback):
                     self.model.logger.record("rollout/ep_lane_changes_mean", lc_mean)
                     self.model.logger.record("rollout/ep_crash_rate", crash)
                     self.model.logger.record("time/total_timesteps", self.num_timesteps)
+
+                    if self.track_violations and self._viol_steps > 0:
+                        for vr in self.VIOL_RULES:
+                            rate = self._viol_counts[vr] / self._viol_steps
+                            self.model.logger.record(f"rollout/viol_{vr}_rate", rate)
+
                     self.model.logger.dump(self.num_timesteps)
 
+                compliance = None
+                viol_str = ""
+                if self.track_violations and self._viol_steps > 0:
+                    mean_viol = sum(self._viol_counts[vr] / self._viol_steps
+                                   for vr in self.VIOL_RULES) / len(self.VIOL_RULES)
+                    compliance = round(1.0 - mean_viol, 3)
+                    parts = [f"{vr} {self._viol_counts[vr]/self._viol_steps:.0%}"
+                             for vr in self.VIOL_RULES]
+                    viol_str = " | " + " ".join(parts)
+                    self._viol_counts = {vr: 0 for vr in self.VIOL_RULES}
+                    self._viol_steps = 0
+
                 flag = ""
-                if self.best_path is not None and r > self.best_rew:
-                    self.best_rew = r
-                    self.model.save(self.best_path)
-                    self.saved_best = True
-                    flag = "  <- best"
+                if self.best_path is not None:
+                    should_save = False
+                    if compliance is not None:
+                        if (compliance > self._best_compliance or
+                                (compliance == self._best_compliance
+                                 and r > self.best_rew)):
+                            self._best_compliance = compliance
+                            should_save = True
+                    elif r > self.best_rew:
+                        should_save = True
+                    if should_save:
+                        self.best_rew = r
+                        self.model.save(self.best_path)
+                        self.saved_best = True
+                        if compliance is not None:
+                            flag = f"  <- best ({compliance:.0%} compliant)"
+                        else:
+                            flag = "  <- best"
 
                 print(f"[{self.tag}] step {self.num_timesteps:>7} | "
-                      f"reward {r:7.2f} | len {ln:5.1f}{ot_str}{flag}", flush=True)
+                      f"reward {r:7.2f} | len {ln:5.1f}{ot_str}{viol_str}{flag}",
+                      flush=True)
         return True
 
 
@@ -263,7 +306,8 @@ def finetune_logic_reward(model, cfg, drive_dir=None):
     start = int(model.num_timesteps)
     extra = effective_total(ft["total_timesteps"], getattr(model, "n_steps", 1))
     print(f"[NESY-FT] fine-tuning {extra} steps on {model.device}", flush=True)
-    printer = ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra)
+    printer = ProgressPrinter("NESY-FT", pf, best_path=path, total_steps=start + extra,
+                              track_violations=True)
     model.learn(total_timesteps=extra, callback=printer, reset_num_timesteps=False)
 
     if printer.saved_best:

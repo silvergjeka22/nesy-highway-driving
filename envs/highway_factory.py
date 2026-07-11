@@ -254,4 +254,7 @@ class LogicRewardWrapper(gym.Wrapper):
 
         info = dict(info)
         info["logic_penalty"] = float(pen)
+        info["viol_RI2"] = float(bool(preds.get("passing_on_right")))
+        info["viol_RG4"] = float(bool(preds.get("impedes_flow")))
+        info["viol_RG2"] = float(bool(preds.get("abrupt_braking")))
         return obs, float(reward - pen), terminated, truncated, info

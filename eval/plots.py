@@ -16,7 +16,10 @@ def load_curve(cfg, tag):
     cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean",
             "len": "rollout/ep_len_mean", "overtakes": "rollout/ep_overtakes_mean",
             "lane_changes": "rollout/ep_lane_changes_mean",
-            "crash": "rollout/ep_crash_rate"}
+            "crash": "rollout/ep_crash_rate",
+            "viol_RI2": "rollout/viol_RI2_rate",
+            "viol_RG4": "rollout/viol_RG4_rate",
+            "viol_RG2": "rollout/viol_RG2_rate"}
     out = pd.DataFrame()
     for k, c in cols.items():
         out[k] = df[c] if c in df.columns else np.nan
@@ -75,6 +78,31 @@ def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
     fig.tight_layout()
     if cfg is not None and save_as:
         fig.savefig(drive_path(cfg, "metrics", save_as), dpi=120, bbox_inches="tight")
+    return fig
+
+
+def plot_finetune_violations(cfg, tag="part2_nesy", save=True):
+    """Plot per-rule violation rates during fine-tuning (RI2, RG4, RG2)."""
+    df = load_curve(cfg, tag)
+    if df is None or df.empty:
+        return None
+    rules = [("viol_RI2", "RI2: Passing on Right"),
+             ("viol_RG4", "RG4: Impeding Flow"),
+             ("viol_RG2", "RG2: Abrupt Braking")]
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for col, label in rules:
+        d = df[["t", col]].dropna().sort_values("t")
+        if not d.empty:
+            ax.plot(d["t"], d[col], marker=".", markersize=3, label=label)
+    ax.set(title="Fine-tune: Soft-Rule Violation Rates (lower is better)",
+           xlabel="timesteps", ylabel="violation rate")
+    ax.set_ylim(-0.02, 1.05)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    if save:
+        fig.savefig(drive_path(cfg, "metrics", "finetune_violations.png"),
+                    dpi=120, bbox_inches="tight")
     return fig
 
 
