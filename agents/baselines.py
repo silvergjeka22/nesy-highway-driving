@@ -140,7 +140,7 @@ class ProgressPrinter(BaseCallback):
                     viol_str = " | " + " ".join(parts)
                     self._viol_counts = {vr: 0 for vr in self.VIOL_RULES}
                     self._viol_steps = 0
-                if self.track_violations and self._cum_viol_steps > 0:
+                if self.track_violations and self._cum_viol_steps >= 1000:
                     mean_viol = sum(self._cum_viol_counts[vr] / self._cum_viol_steps
                                    for vr in self.VIOL_RULES) / len(self.VIOL_RULES)
                     compliance = round(1.0 - mean_viol, 3)
