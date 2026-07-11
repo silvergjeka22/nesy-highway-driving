@@ -179,7 +179,7 @@ fsm:
   emergency_gap: 8.0          # EMERGENCY_STOP trigger [m]
 
 finetune:
-  total_timesteps: 5000
+  total_timesteps: 3000
   learning_rate: 0.0001
 
 # =============================================================================
