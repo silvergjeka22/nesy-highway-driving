@@ -202,9 +202,10 @@ def run_nesy_md_episode(model, env, seed, cfg, shield):
     steps = offroad_steps = overtakes = lane_changes = 0
     viol = {k: 0 for k in RULES}
     speed_sum = 0.0
+    bridge = {}
 
     while not done:
-        action, fsm = nesy_md_action(model, env, cfg, fsm, shield)
+        action, fsm = nesy_md_action(model, env, cfg, fsm, shield, bridge=bridge)
         obs, reward, terminated, truncated, info = env.step(action)
         passed, ahead = count_passes_md(env, ahead)
         overtakes += passed

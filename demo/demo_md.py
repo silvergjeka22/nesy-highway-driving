@@ -88,8 +88,9 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
             _, ahead = count_passes_md(env, set())
             done = False
             ot = steps = 0
+            bridge = {}
             while not done and len(frames) < target:
-                action, fsm = nesy_md_action(model, env, cfg, fsm, shield=shield)
+                action, fsm = nesy_md_action(model, env, cfg, fsm, shield=shield, bridge=bridge)
                 obs, _, terminated, truncated, _ = env.step(action)
                 passed, ahead = count_passes_md(env, ahead)
                 ot += passed

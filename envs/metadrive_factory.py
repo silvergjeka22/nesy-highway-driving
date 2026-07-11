@@ -55,6 +55,7 @@ class VelocityActionWrapper(gym.Wrapper):
         super().__init__(env)
         self.v_max = cfg["metadrive"]["v_max"]
         self.omega_max = cfg["metadrive"]["omega_max"]
+        self.max_steer = float(cfg["metadrive"].get("max_steer", 1.0))
         self.throttle_kp = float(cfg["metadrive"].get("throttle_kp", 5.0))
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
@@ -83,6 +84,7 @@ class VelocityActionWrapper(gym.Wrapper):
         except Exception:
             v_cur = 0.0
         steering = float(np.clip(omega / max(self.omega_max, 1e-6), -1.0, 1.0))
+        steering *= self.max_steer
         throttle = float(np.clip(self.throttle_kp * (v - v_cur) / max(self.v_max, 1e-6), -1.0, 1.0))
         return np.array([steering, throttle], dtype=np.float32)
 
@@ -107,15 +109,16 @@ def kin_obs_from_scene(scene, cfg):
         return float(np.clip((v - lo) / (hi - lo) * 2.0 - 1.0, -1.0, 1.0))
 
     ego = scene["ego"]
+    x_offset = float(cfg.get("metadrive", {}).get("obs_x_offset", 0.0))
 
-    def make_row(vd, relative):
+    def make_row(vd, relative, x_off=0.0):
         bx, by, bvx, bvy = (ego["x"], ego["y"], ego["vx"], ego["vy"]) if relative else (0.0, 0.0, 0.0, 0.0)
         full = {"presence": 1.0,
-                "x": nz((vd["x"] - bx), "x"), "y": nz((vd["y"] - by), "y"),
+                "x": nz((vd["x"] + x_off - bx), "x"), "y": nz((vd["y"] - by), "y"),
                 "vx": nz((vd["vx"] - bvx) * vscale, "vx"), "vy": nz((vd["vy"] - bvy) * vscale, "vy")}
         return [full[f] for f in feats]
 
-    rows = [make_row(ego, relative=False)]
+    rows = [make_row(ego, relative=False, x_off=x_offset)]
     nearest = sorted(scene.get("others", []),
                      key=lambda o: (o["x"] - ego["x"]) ** 2 + (o["y"] - ego["y"]) ** 2)[:n - 1]
     rows += [make_row(o, relative=True) for o in nearest]
@@ -143,23 +146,45 @@ def scene_to_lidar(scene, n_lasers=72, max_range=50.0):
     return ranges
 
 
-def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True):
-    """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge. Returns (action, fsm_state)."""
+def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
+    """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge.
+
+    Args:
+        bridge: mutable dict for warmup / lane-change cooldown state.
+                Pass ``{}`` on the first call and reuse across steps.
+
+    Returns (action, fsm_state).
+    """
     from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS
     from labs.lab1_cmd_vel import manoeuvre_to_cmd_vel
 
-    a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
-                               deterministic=cfg["eval"].get("deterministic", True))
     scene = read_scene_md(env)
-    manoeuvre = ACTIONS[int(a)]
-    if shield:
-        idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
-        manoeuvre = ACTIONS[idx]
-    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
-    if shield:
-        lidar = scene_to_lidar(scene, cfg["metadrive"].get("lidar_num_lasers", 72))
-        (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
     md = cfg["metadrive"]
+    ego_v = scene["ego"]["v"]
+    v_cruise = 0.6 * md["v_max"]
+
+    if ego_v < v_cruise:
+        manoeuvre = "FASTER"
+    else:
+        cooldown = 0 if bridge is None else bridge.get("lc_cd", 0)
+        a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
+                                   deterministic=cfg["eval"].get("deterministic", True))
+        manoeuvre = ACTIONS[int(a)]
+        if shield:
+            idx, fsm_state = safety_shield(int(a), predicates(scene, cfg), fsm_state, cfg)
+            manoeuvre = ACTIONS[idx]
+        if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
+            if cooldown > 0:
+                manoeuvre = "IDLE"
+            elif bridge is not None:
+                bridge["lc_cd"] = int(md.get("lc_cooldown", 12))
+        if bridge is not None and cooldown > 0:
+            bridge["lc_cd"] = cooldown - 1
+
+    v, omega = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
+    if shield and ego_v >= v_cruise:
+        lidar = scene_to_lidar(scene, md.get("lidar_num_lasers", 72))
+        (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
     return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
 
 
