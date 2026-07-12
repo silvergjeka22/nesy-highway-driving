@@ -169,18 +169,16 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps,
     return save_mp4(frames, out_path, fps=fps)
 
 
-def record_topdown(model, cfg, out_path, shield=True, min_seconds=30,
-                   best_of=None, episode_seed=None):
-    """Record the top-down 2D view (offscreen, CPU), zoomed on the ego."""
+def make_topdown_grab(env, cfg):
+    """Build a zoomed top-down frame grabber for an (already reset) MetaDrive env.
+
+    The renderer clamps scaling to film_height/map_length, so the film must
+    cover the whole map at the requested zoom or the view ends up far away."""
     md = cfg["metadrive"]
     size = tuple(md.get("video_size", [900, 500]))
     scaling = float(md.get("video_scaling", 10.0))
-    # same scenario window as evaluate_nesy_md, so an eval episode seed replays
-    # the SAME scenario here (MetaDrive wraps seeds into [start_seed, +num_scenarios))
-    env = make_env_md(cfg, render=True, seed=int(cfg["seed"]))
-
-    # The renderer clamps scaling to film_height/map_length, so the film must
-    # cover the whole map at the requested zoom or the view ends up far away.
+    if getattr(env.unwrapped, "current_map", None) is None:
+        env.reset(seed=int(cfg["seed"]))
     bb = env.unwrapped.current_map.road_network.get_bounding_box()
     film = int(scaling * (max(bb[1] - bb[0], bb[3] - bb[2]) + 20.0))
 
@@ -188,6 +186,17 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30,
         return env.unwrapped.render(mode="top_down", window=False, screen_size=size,
                                     film_size=(film, film), scaling=scaling)
 
+    return grab
+
+
+def record_topdown(model, cfg, out_path, shield=True, min_seconds=30,
+                   best_of=None, episode_seed=None):
+    """Record the top-down 2D view (offscreen, CPU), zoomed on the ego."""
+    md = cfg["metadrive"]
+    # same scenario window as evaluate_nesy_md, so an eval episode seed replays
+    # the SAME scenario here (MetaDrive wraps seeds into [start_seed, +num_scenarios))
+    env = make_env_md(cfg, render=True, seed=int(cfg["seed"]))
+    grab = make_topdown_grab(env, cfg)
     return _record(model, cfg, env, grab, out_path, shield, min_seconds,
                    md.get("video_fps", 20), best_of=best_of, episode_seed=episode_seed)
 

@@ -170,8 +170,12 @@ def summarise(rows, count_violations):
 
 # ---- Part 3: MetaDrive evaluation ------------------------------------------
 
-def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
-    """Evaluate a discrete model on MetaDrive via the Lab-1 bridge."""
+def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True, video_out=None):
+    """Evaluate a discrete model on MetaDrive via the Lab-1 bridge.
+
+    With ``video_out``, every episode is also rendered and the BEST episode
+    (most overtakes, then lane changes, then length) is saved as an MP4 —
+    the video is the eval episode itself, so they can never disagree."""
     from envs.metadrive_factory import make_env_md
 
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
@@ -179,23 +183,44 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
     # per-seed count than the fast highway eval unless configured otherwise.
     eps_per_seed = int(cfg["metadrive"].get("episodes_per_seed",
                                             cfg["eval"]["episodes_per_seed"]))
-    env = make_env_md(cfg, render=False)
+    env = make_env_md(cfg, render=bool(video_out))
+    grab = None
+    if video_out:
+        from demo.demo_md import make_topdown_grab
+        grab = make_topdown_grab(env, cfg)
     rows = []
+    best = None
     try:
         for i, seed in enumerate(seeds):
             for ep in range(eps_per_seed):
                 # seed*100+ep collides mod num_scenarios (100 % 50 == 0): every eval
                 # seed would replay the same two scenarios. Space episodes instead.
                 ep_seed = int(cfg["seed"]) + i * eps_per_seed + ep
-                rows.append(run_nesy_md_episode(part2_model, env, ep_seed, cfg, shield))
+                row = run_nesy_md_episode(part2_model, env, ep_seed, cfg, shield, grab=grab)
+                frames = row.pop("_frames", None)
+                rows.append(row)
+                if frames is not None:
+                    score = (row["overtakes"], row["lane_changes"], row["length"])
+                    if best is None or score > best[0]:
+                        best = (score, dict(row), frames)
             print_eval_progress(rows, i + 1, len(seeds))
     finally:
         env.close()
+
+    if video_out and best is not None:
+        from utils import save_mp4
+        save_mp4(best[2], video_out, fps=cfg["metadrive"].get("video_fps", 20))
+        r = best[1]
+        print(f"[eval] video: best episode saved -> {video_out} | "
+              f"{r['overtakes']} overtakes, {r['lane_changes']} lane changes, "
+              f"{r['length']} steps, crashed={r['crashed']} (seed {r['seed']})", flush=True)
     return {"summary": summarise(rows, True), "episodes": rows, "seeds": seeds}
 
 
-def run_nesy_md_episode(model, env, seed, cfg, shield):
-    """Run one MetaDrive episode through the bridge (manoeuvre -> cmd_vel -> CBF/VO)."""
+def run_nesy_md_episode(model, env, seed, cfg, shield, grab=None):
+    """Run one MetaDrive episode through the bridge (manoeuvre -> cmd_vel -> CBF/VO).
+
+    With ``grab``, overlaid video frames are collected into row["_frames"]."""
     import random
     from envs.metadrive_factory import read_scene_md, nesy_md_action, count_passes_md
     from nesy.roadmap import predicates, rule_violations
@@ -216,6 +241,8 @@ def run_nesy_md_episode(model, env, seed, cfg, shield):
     speed_sum = 0.0
     bridge = {}
 
+    frames = [] if grab is not None else None
+
     while not done:
         action, fsm = nesy_md_action(model, env, cfg, fsm, shield, bridge=bridge)
         obs, reward, terminated, truncated, info = env.step(action)
@@ -232,9 +259,19 @@ def run_nesy_md_episode(model, env, seed, cfg, shield):
         if info.get("out_of_road", info.get("is_offroad", False)):
             offroad_steps += 1
         done = terminated or truncated
+        if frames is not None:
+            from demo.demo_md import draw_telemetry
+            frame = grab(env, obs)
+            if frame is not None:
+                frame = draw_telemetry(
+                    frame, sc["ego"].get("v", 0.0),
+                    float(action[1]) * cfg["metadrive"]["omega_max"],
+                    fsm_state=fsm, overtakes=overtakes, lane_changes=lane_changes,
+                    crashed=done and bool(info.get("crash", False)))
+                frames.append(np.asarray(frame))
 
     crashed = bool(info.get("crash", info.get("crashed", info.get("crash_vehicle", False))))
-    return {
+    row = {
         "seed": seed, "crashed": crashed,
         "on_road_pct": 100.0 * (1.0 - offroad_steps / steps) if steps else 0.0,
         "overtakes": int(overtakes), "lane_changes": lane_changes,
@@ -243,6 +280,9 @@ def run_nesy_md_episode(model, env, seed, cfg, shield):
         "violations": viol, "viol_steps": steps,
         "mean_speed": speed_sum / steps if steps else 0.0,
     }
+    if frames is not None:
+        row["_frames"] = frames
+    return row
 
 
 # ---- Part 2: rank NeSy methods ---------------------------------------------
