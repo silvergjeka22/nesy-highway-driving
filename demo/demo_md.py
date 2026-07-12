@@ -53,8 +53,9 @@ def _tensor_numpy_compat(self, *args, **kwargs):
 _th.Tensor.numpy = _tensor_numpy_compat
 
 
-def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None, crashed=False):
-    """Overlay speed, yaw-rate, FSM state, overtake count (and CRASHED) onto a frame."""
+def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None,
+                   lane_changes=None, crashed=False):
+    """Overlay speed, yaw-rate, FSM state, overtake/lane-change counts (and CRASHED)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
@@ -69,6 +70,8 @@ def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None, crashed=Fals
         text += f"\nFSM: {fsm_state}"
     if overtakes is not None:
         text += f"\novertakes: {overtakes}"
+    if lane_changes is not None:
+        text += f"\nlane changes: {lane_changes}"
     pad = max(4, size // 3)
     box = draw.multiline_textbbox((pad, pad), text, font=font)
     draw.rectangle((0, 0, box[2] + pad, box[3] + pad), fill=(0, 0, 0))
@@ -83,12 +86,13 @@ def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None, crashed=Fals
 
 
 def _play_episode(model, cfg, env, grab_frame, seed, shield, max_frames):
-    """Play one seeded episode; return (frames, overtakes, steps, crashed)."""
+    """Play one seeded episode; return (frames, overtakes, lane_changes, steps, crashed)."""
     env.reset(seed=int(seed))
     fsm = cfg["fsm"]["initial_state"]
     _, ahead = count_passes_md(env, set())
+    prev_lane = read_scene_md(env)["ego"].get("lane")
     done = False
-    ot = steps = 0
+    ot = lc = steps = 0
     bridge = {}
     frames = []
     info = {}
@@ -99,15 +103,19 @@ def _play_episode(model, cfg, env, grab_frame, seed, shield, max_frames):
         ot += passed
         steps += 1
         done = terminated or truncated
+        sc = read_scene_md(env)
+        lane = sc["ego"].get("lane")
+        lc += int(lane != prev_lane)
+        prev_lane = lane
         frame = grab_frame(env, obs)
         if frame is not None:
             frame = draw_telemetry(
-                frame, read_scene_md(env)["ego"]["v"],
+                frame, sc["ego"]["v"],
                 float(action[1]) * cfg["metadrive"]["omega_max"],
-                fsm_state=fsm, overtakes=ot,
+                fsm_state=fsm, overtakes=ot, lane_changes=lc,
                 crashed=done and bool(info.get("crash", False)))
             frames.append(np.asarray(frame))
-    return frames, ot, steps, bool(info.get("crash", False))
+    return frames, ot, lc, steps, bool(info.get("crash", False))
 
 
 def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps, best_of=None):
@@ -120,24 +128,27 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps, bes
             best = None
             for i in range(best_of):
                 ep = _play_episode(model, cfg, env, grab_frame, seed0 + i, shield, target)
-                print(f"[demo] candidate seed {seed0 + i}: {ep[1]} overtakes in {ep[2]} steps"
-                      f"{'  (crashed)' if ep[3] else ''}", flush=True)
-                if best is None or (ep[1], ep[2]) > (best[1], best[2]):
+                print(f"[demo] candidate seed {seed0 + i}: {ep[1]} overtakes, "
+                      f"{ep[2]} lane changes in {ep[3]} steps"
+                      f"{'  (crashed)' if ep[4] else ''}", flush=True)
+                # most action wins: overtakes + lane changes, then longest
+                if best is None or (ep[1] + ep[2], ep[3]) > (best[1] + best[2], best[3]):
                     best = ep
-            frames, ot, steps, crashed = best
-            print(f"[demo] best episode: {ot} overtakes, {steps} steps, crashed={crashed} "
-                  f"({len(frames) / fps:.1f}s)", flush=True)
+            frames, ot, lc, steps, crashed = best
+            print(f"[demo] best episode: {ot} overtakes, {lc} lane changes, {steps} steps, "
+                  f"crashed={crashed} ({len(frames) / fps:.1f}s)", flush=True)
         else:
             frames = []
             total_ot = total_steps = 0
             ep = 0
             while len(frames) < target:
-                ep_frames, ot, steps, _ = _play_episode(
+                ep_frames, ot, lc, steps, _ = _play_episode(
                     model, cfg, env, grab_frame, seed0 + ep, shield, target - len(frames))
                 frames.extend(ep_frames)
                 total_ot += ot
                 total_steps += steps
-                print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps", flush=True)
+                print(f"[demo] episode {ep + 1}: {ot} overtakes, {lc} lane changes "
+                      f"in {steps} steps", flush=True)
                 ep += 1
             print(f"[demo] overtakes: {total_ot} in {total_steps} steps "
                   f"({100.0 * total_ot / max(1, total_steps):.1f} per 100 steps)")
