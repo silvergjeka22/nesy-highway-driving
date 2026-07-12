@@ -188,13 +188,15 @@ finetune:
 metadrive:
   enabled: true
   map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
-  traffic_density: 0.1        # sparse traffic: free lanes beside the slow cars -> more overtakes
+  traffic_density: 0.07       # spread-out traffic (median gap ~100 m): room to change lane and pass
   num_scenarios: 50
   horizon: 1000
   v_max: 15.0                 # max commandable speed [m/s]
   omega_max: 0.6              # max angular speed [rad/s]
   max_steer: 0.3              # cap steering fraction (1.0 = full lock)
-  obs_speed_scale: 4.0        # MetaDrive->highway speed scaling
+  obs_speed_scale: 2.5        # MetaDrive->highway speed scaling: the model's preferred
+                              # 25-30 highway-m/s zone maps to 10-12 m/s here, well above
+                              # NPC free-flow (~8.3) so it catches traffic and passes it
   obs_x_offset: 175.0         # align ego x with highway-env start (~180 m)
   lidar_num_lasers: 72
   video_seconds: 30

@@ -171,9 +171,13 @@ def continuous_shield(v_cmd, omega_cmd, scene, cfg, lidar_ranges=None):
 
     if lidar_ranges is not None:
         from labs.lab2_lidar_avoidance import lidar_to_predicates, reactive_avoidance
-        lpreds = lidar_to_predicates(lidar_ranges, cfg)
+        # Brake only for obstacles in the frontal ±60° sector: a car alongside in
+        # the next lane is not in the path, and braking for it blocks every pass.
+        n = len(lidar_ranges)
+        frontal = lidar_ranges[n // 3: 2 * n // 3 + 1]
+        lpreds = lidar_to_predicates(frontal, cfg)
         if lpreds["too_close"]:
-            v_react, _ = reactive_avoidance(lidar_ranges, cfg)
+            v_react, _ = reactive_avoidance(frontal, cfg)
             if v_react < v_safe:
                 v_safe = v_react
                 intervened = True
