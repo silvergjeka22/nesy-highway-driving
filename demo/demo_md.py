@@ -171,7 +171,9 @@ def record_topdown(model, cfg, out_path, shield=True, min_seconds=30,
     md = cfg["metadrive"]
     size = tuple(md.get("video_size", [900, 500]))
     scaling = float(md.get("video_scaling", 10.0))
-    env = make_env_md(cfg, render=True, seed=int(cfg["eval_seeds"][0]))
+    # same scenario window as evaluate_nesy_md, so an eval episode seed replays
+    # the SAME scenario here (MetaDrive wraps seeds into [start_seed, +num_scenarios))
+    env = make_env_md(cfg, render=True, seed=int(cfg["seed"]))
 
     # The renderer clamps scaling to film_height/map_length, so the film must
     # cover the whole map at the requested zoom or the view ends up far away.
@@ -190,7 +192,7 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30,
               best_of=None, episode_seed=None):
     """Record a 3D chase-camera video via panda3d offscreen rendering."""
     md = cfg["metadrive"]
-    env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
+    env = make_env_md(cfg, render=False, seed=int(cfg["seed"]), video_3d=True)
 
     def grab(env, obs):
         try:
