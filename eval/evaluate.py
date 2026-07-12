@@ -196,9 +196,14 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
 
 def run_nesy_md_episode(model, env, seed, cfg, shield):
     """Run one MetaDrive episode through the bridge (manoeuvre -> cmd_vel -> CBF/VO)."""
+    import random
     from envs.metadrive_factory import read_scene_md, nesy_md_action, count_passes_md
     from nesy.roadmap import predicates, rule_violations
 
+    # Pin the global RNGs so the episode is identical regardless of what ran
+    # before in this process — required for exact video replay of eval episodes.
+    random.seed(int(seed))
+    np.random.seed(int(seed) % 2**31)
     obs, info = env.reset(seed=seed)
     fsm = cfg["fsm"]["initial_state"]
     _, ahead = count_passes_md(env, set())

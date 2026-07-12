@@ -87,6 +87,10 @@ def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None,
 
 def _play_episode(model, cfg, env, grab_frame, seed, shield, max_frames):
     """Play one seeded episode; return (frames, overtakes, lane_changes, steps, crashed)."""
+    import random
+    # Same RNG pinning as the eval, so a replayed eval episode is bit-identical.
+    random.seed(int(seed))
+    np.random.seed(int(seed) % 2**31)
     env.reset(seed=int(seed))
     fsm = cfg["fsm"]["initial_state"]
     _, ahead = count_passes_md(env, set())
