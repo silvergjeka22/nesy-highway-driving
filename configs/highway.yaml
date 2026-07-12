@@ -16,9 +16,7 @@ paths:
   videos: videos
   metrics: metrics
 
-# =============================================================================
 # PART 1 — environment + baselines
-# =============================================================================
 env:
   id: highway-v0
   config:
@@ -127,9 +125,7 @@ eval:
 select:
   min_overtake_frac: 0.5      # NeSy winner must keep >= this fraction of baseline overtakes
 
-# =============================================================================
 # PART 2 — NeSy rules (Maierhofer 2020, Table II, SI units)
-# =============================================================================
 rules:
   enabled: true
   car_length: 5.0             # vehicle length [m]
@@ -183,9 +179,7 @@ finetune:
   total_timesteps: 3000
   learning_rate: 0.0001
 
-# =============================================================================
 # PART 3 — MetaDrive + CBF / velocity obstacles
-# =============================================================================
 metadrive:
   enabled: true
   map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
@@ -193,6 +187,8 @@ metadrive:
                               # with room to change lane and pass
   num_scenarios: 50
   horizon: 1000
+  episodes_per_seed: 2        # MetaDrive episodes are long (~1000 steps): 10 seeds x 2
+                              # = 20 episodes per config keeps the eval under ~20 min
   v_max: 15.0                 # max commandable speed [m/s]
   omega_max: 0.6              # max angular speed [rad/s]
   max_steer: 0.3              # cap steering fraction (1.0 = full lock)

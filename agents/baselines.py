@@ -280,7 +280,6 @@ def load_model(path, algo):
 
 
 # Part 2: logic-shaped reward fine-tune
-
 def to_device(model, cfg):
     """Move an SB3 model to the configured device (cpu or cuda)."""
     dev = resolve_device(cfg)

@@ -26,12 +26,12 @@ if sys.platform == "linux" and not os.environ.get("DISPLAY"):
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
-import numpy as np  # noqa: E402
+import numpy as np 
 
-from utils import load_config, save_mp4  # noqa: E402
-from envs.highway_factory import create_environment, read_scene  # noqa: E402
-from agents.baselines import load_model, build_ppo, build_dqn, build_qrdqn  # noqa: E402
-from nesy.roadmap import predicates, safety_shield  # noqa: E402
+from utils import load_config, save_mp4 
+from envs.highway_factory import create_environment, read_scene 
+from agents.baselines import load_model, build_ppo, build_dqn, build_qrdqn 
+from nesy.roadmap import predicates, safety_shield 
 
 _BUILDERS = {"ppo": build_ppo, "dqn": build_dqn, "qrdqn": build_qrdqn}
 

@@ -175,13 +175,17 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
     from envs.metadrive_factory import make_env_md
 
     seeds = list(seeds) if seeds is not None else list(cfg["eval_seeds"])
-    ec = cfg["eval"]
+    # MetaDrive episodes run to the horizon (~1000 steps), so use a smaller
+    # per-seed count than the fast highway eval unless configured otherwise.
+    eps_per_seed = int(cfg["metadrive"].get("episodes_per_seed",
+                                            cfg["eval"]["episodes_per_seed"]))
     env = make_env_md(cfg, render=False)
     rows = []
     try:
-        for seed in seeds:
-            for ep in range(ec["episodes_per_seed"]):
+        for i, seed in enumerate(seeds):
+            for ep in range(eps_per_seed):
                 rows.append(run_nesy_md_episode(part2_model, env, int(seed) * 100 + ep, cfg, shield))
+            print_eval_progress(rows, i + 1, len(seeds))
     finally:
         env.close()
     return {"summary": summarise(rows, True), "episodes": rows, "seeds": seeds}

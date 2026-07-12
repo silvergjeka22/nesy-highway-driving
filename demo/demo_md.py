@@ -24,16 +24,16 @@ except OSError:
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
-import numpy as np  # noqa: E402
+import numpy as np 
 
-from utils import load_config, save_mp4  # noqa: E402
-from agents.baselines import load_model  # noqa: E402
-from envs.metadrive_factory import (  # noqa: E402
+from utils import load_config, save_mp4 
+from agents.baselines import load_model 
+from envs.metadrive_factory import ( 
     make_env_md, nesy_md_action, count_passes_md, read_scene_md,
 )
 
 # Patch torch for numpy 1.x/2.x cross-version compatibility.
-import torch as _th  # noqa: E402
+import torch as _th 
 _orig_as_tensor = _th.as_tensor
 def _as_tensor_compat(data, dtype=None, device=None):
     try:

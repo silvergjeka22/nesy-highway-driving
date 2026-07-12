@@ -1,8 +1,3 @@
-"""MetaDrive env with a continuous (v, ω) action (Part 3).
-
-Lazy imports — MetaDrive is only installed in the Part-3 notebook.
-"""
-
 import numpy as np
 import gymnasium as gym
 
