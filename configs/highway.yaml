@@ -188,7 +188,7 @@ finetune:
 metadrive:
   enabled: true
   map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
-  traffic_density: 0.15
+  traffic_density: 0.1        # sparse traffic: free lanes beside the slow cars -> more overtakes
   num_scenarios: 50
   horizon: 1000
   v_max: 15.0                 # max commandable speed [m/s]
