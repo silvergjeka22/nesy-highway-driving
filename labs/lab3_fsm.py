@@ -86,12 +86,14 @@ def admissible_actions(state, preds, cfg):
     if not preds.get("safe_gap_right"):
         _drop(allowed, "LANE_RIGHT")
 
-    # State preference: while overtaking, do not voluntarily merge right, and do
-    # not passively sit behind the leader — the state's manoeuvre is the pass.
+    # State preference: OVERTAKE_LEFT's manoeuvre IS the pass — no merging right,
+    # no coasting, no accelerating into the leader. Only the lane change (when
+    # the gap is safe) or braking remain admissible.
     if state == "OVERTAKE_LEFT":
         _drop(allowed, "LANE_RIGHT")
         if "LANE_LEFT" in allowed:
             _drop(allowed, "IDLE")
+            _drop(allowed, "FASTER")
 
     return allowed or ["SLOWER"]
 

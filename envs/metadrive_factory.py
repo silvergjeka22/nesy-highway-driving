@@ -227,6 +227,13 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
         idx, fsm_state = safety_shield(ACTION_INDEX[manoeuvre], predicates(scene, cfg),
                                        fsm_state, cfg)
         manoeuvre = ACTIONS[idx]
+        # Necessity gate: change lane only with a purpose — overtake on the LEFT
+        # when the FSM says a slow leader is near (FOLLOW/OVERTAKE_LEFT), and
+        # return RIGHT only when cruising. No wandering across empty lanes.
+        if manoeuvre == "LANE_LEFT" and fsm_state not in ("FOLLOW", "OVERTAKE_LEFT"):
+            manoeuvre = "IDLE"
+        elif manoeuvre == "LANE_RIGHT" and fsm_state != "CRUISE":
+            manoeuvre = "IDLE"
     if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
         if target is not None:
             manoeuvre = "IDLE"  # a lane change is already in progress: finish it first

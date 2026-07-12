@@ -176,7 +176,8 @@ fsm:
   initial_state: CRUISE
   states: [CRUISE, FOLLOW, OVERTAKE_LEFT, MERGE, EMERGENCY_STOP]
   follow_gap: 25.0            # FOLLOW trigger [m]
-  emergency_gap: 8.0          # EMERGENCY_STOP trigger [m]
+  emergency_gap: 5.0          # EMERGENCY_STOP trigger [m] — below the CBF's natural
+                              # following distance, so steady following isn't "emergency"
 
 finetune:
   total_timesteps: 3000
