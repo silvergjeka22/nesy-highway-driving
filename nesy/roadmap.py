@@ -44,6 +44,7 @@ def predicates(scene, cfg):
     preds["leader_gap"] = (
         (leader["x"] - ego["x"] - r["car_length"]) if leader is not None else float("inf")
     )
+    preds["leader_slower"] = leader is not None and leader["v"] < ego["v"] - 0.3
     return preds
 
 

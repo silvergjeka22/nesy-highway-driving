@@ -184,7 +184,10 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True):
     try:
         for i, seed in enumerate(seeds):
             for ep in range(eps_per_seed):
-                rows.append(run_nesy_md_episode(part2_model, env, int(seed) * 100 + ep, cfg, shield))
+                # seed*100+ep collides mod num_scenarios (100 % 50 == 0): every eval
+                # seed would replay the same two scenarios. Space episodes instead.
+                ep_seed = int(cfg["seed"]) + i * eps_per_seed + ep
+                rows.append(run_nesy_md_episode(part2_model, env, ep_seed, cfg, shield))
             print_eval_progress(rows, i + 1, len(seeds))
     finally:
         env.close()

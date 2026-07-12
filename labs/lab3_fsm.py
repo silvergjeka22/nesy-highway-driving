@@ -39,7 +39,10 @@ def fsm_transition(state, preds, cfg):
 
     if state in ("CRUISE", "FOLLOW"):
         if gap < f["follow_gap"]:
-            if preds.get("safe_gap_left"):
+            # Overtake only a leader that actually impedes: it is slower than us
+            # (we are closing) or we are already boxed in close behind it.
+            impeded = preds.get("leader_slower") or gap < 0.6 * f["follow_gap"]
+            if impeded and preds.get("safe_gap_left"):
                 return "OVERTAKE_LEFT"
             return "FOLLOW"
         return "CRUISE"
