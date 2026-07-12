@@ -123,13 +123,11 @@ def play_episode(model, env, hook, seed, cfg, apply_shield):
     return ep_frames, marks, int(info.get("overtakes", 0)), steps, bool(info.get("crashed"))
 
 
-def record_best_episode(model, cfg, out_path, apply_shield=False,
-                        episode_seed=None, best_of=10):
-    """Record ONE episode: the given eval-episode seed (exact replay), or the
-    best of `best_of` candidate episodes (most overtakes, then longest)."""
+def record_best_episode(model, cfg, out_path, apply_shield=False, best_of=10):
+    """Record ONE episode: the best of `best_of` candidates (most overtakes,
+    then longest)."""
     fps = int(cfg["env"]["config"].get("simulation_frequency", 15))
-    seeds = ([int(episode_seed)] if episode_seed is not None
-             else [int(cfg["eval_seeds"][0]) + i for i in range(best_of)])
+    seeds = [int(cfg["eval_seeds"][0]) + i for i in range(best_of)]
 
     env = create_environment(cfg, render=True)
     if hasattr(model, "set_eval_env"):
@@ -154,6 +152,37 @@ def record_best_episode(model, cfg, out_path, apply_shield=False,
     print(f"[demo] best episode: {ot} overtakes, {steps} steps, crashed={crashed} "
           f"({len(frames) / fps:.1f}s)", flush=True)
     return save_mp4(frames, out_path, fps=fps), ot, steps
+
+
+def record_episodes(model, cfg, out_path, apply_shield, episode_seeds, min_seconds=0):
+    """Replay the given eval-episode seeds back-to-back (best first), stopping
+    once the clip reaches min_seconds. Each episode keeps its own overtake
+    counter and CRASHED banner — shows who survives longer."""
+    fps = int(cfg["env"]["config"].get("simulation_frequency", 15))
+    env = create_environment(cfg, render=True)
+    if hasattr(model, "set_eval_env"):
+        model.set_eval_env(env)
+    hook = _FrameHook(env)
+    env.unwrapped._record_video_wrapper = hook
+    frames = []
+    total_ot = total_steps = 0
+    try:
+        for i, seed in enumerate(episode_seeds):
+            ep_frames, marks, ot, steps, crashed = play_episode(
+                model, env, hook, seed, cfg, apply_shield)
+            frames.extend(overlay_episode_stats(ep_frames, marks, crashed, fps))
+            total_ot += ot
+            total_steps += steps
+            print(f"[demo] episode {i + 1} (seed {seed}): {ot} overtakes in {steps} steps"
+                  f"{'  (crashed)' if crashed else ''}", flush=True)
+            if min_seconds and len(frames) >= min_seconds * fps:
+                break
+    finally:
+        env.unwrapped._record_video_wrapper = None
+        env.close()
+
+    print(f"[demo] clip: {len(frames)} frames @ {fps} fps = {len(frames) / fps:.1f}s", flush=True)
+    return save_mp4(frames, out_path, fps=fps), total_ot, total_steps
 
 
 def record(model, cfg, out_path, apply_shield=False, min_seconds=30, no_crash=False):
@@ -205,8 +234,9 @@ def main():
     ap.add_argument("--duration", type=int, default=None, help="episode length in sim-seconds")
     ap.add_argument("--no-crash", dest="no_crash", action="store_true",
                     help="discard crashed episodes")
-    ap.add_argument("--episode-seed", type=int, default=None,
-                    help="record exactly this eval-episode seed (single episode)")
+    ap.add_argument("--episode-seed", type=str, default=None,
+                    help="eval-episode seed(s) to replay exactly, comma-separated; "
+                         "with --seconds, plays them until the clip is that long")
     ap.add_argument("--best-of", type=int, default=None,
                     help="record the best of N candidate episodes (most overtakes)")
     args = ap.parse_args()
@@ -233,13 +263,18 @@ def main():
         model = load_model(args.model, args.algo)
         print(f"loaded {args.algo} model: {args.model}")
 
-    if args.episode_seed is not None or args.best_of is not None:
-        mode = (f"episode seed {args.episode_seed}" if args.episode_seed is not None
-                else f"best of {args.best_of} episodes")
-        print(f"recording {mode} (shield={args.shield}) -> {out_path}")
-        path, overtakes, steps = record_best_episode(
+    if args.episode_seed is not None:
+        seeds = [int(s) for s in args.episode_seed.split(",")]
+        floor = args.seconds or 0
+        print(f"replaying {len(seeds)} eval episode(s), >= {floor:.0f}s "
+              f"(shield={args.shield}) -> {out_path}")
+        path, overtakes, steps = record_episodes(
             model, cfg, out_path, apply_shield=args.shield,
-            episode_seed=args.episode_seed, best_of=args.best_of or 10)
+            episode_seeds=seeds, min_seconds=floor)
+    elif args.best_of is not None:
+        print(f"recording best of {args.best_of} episodes (shield={args.shield}) -> {out_path}")
+        path, overtakes, steps = record_best_episode(
+            model, cfg, out_path, apply_shield=args.shield, best_of=args.best_of)
     else:
         print(f"recording >= {min_seconds:.0f}s (shield={args.shield}) -> {out_path}")
         path, overtakes, steps = record(model, cfg, out_path, apply_shield=args.shield,
