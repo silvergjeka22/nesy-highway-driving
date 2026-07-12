@@ -155,13 +155,16 @@ def _road_clear_ahead(scene, dist=25.0):
 
 def _lane_blocked(scene, ego, y_centre):
     """True if a car occupies the slot beside the ego in that lane, or a faster
-    car behind would reach it (rear window widens with closing speed)."""
+    car behind would reach it (rear window widens with closing speed).
+
+    The 18 m look-ahead exceeds the CBF's natural following distance (~16 m),
+    so the ego cannot merge right back behind a car it is currently passing."""
     for o in scene.get("others", []):
         if abs(o["y"] - y_centre) >= 1.8:
             continue
         dx = o["x"] - ego["x"]
         closing = max(0.0, o.get("vx", 0.0) - ego.get("vx", 0.0))
-        if -6.0 - 2.0 * closing < dx < 10.0:
+        if -6.0 - 2.0 * closing < dx < 18.0:
             return True
     return False
 
@@ -225,12 +228,15 @@ def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
                                        fsm_state, cfg)
         manoeuvre = ACTIONS[idx]
     if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
-        cand = lane + (-1 if manoeuvre == "LANE_LEFT" else 1)  # left = lower index (+y)
-        if (0 <= cand < len(centres) and bridge is not None
-                and not _lane_blocked(scene, ego, centres[cand])):
-            bridge["target_lane"] = target = cand
+        if target is not None:
+            manoeuvre = "IDLE"  # a lane change is already in progress: finish it first
         else:
-            manoeuvre = "IDLE"  # no such lane / slot occupied: never steer into it
+            cand = lane + (-1 if manoeuvre == "LANE_LEFT" else 1)  # left = lower index (+y)
+            if (0 <= cand < len(centres) and bridge is not None
+                    and not _lane_blocked(scene, ego, centres[cand])):
+                bridge["target_lane"] = target = cand
+            else:
+                manoeuvre = "IDLE"  # no such lane / slot occupied: never steer into it
 
     v, _ = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
     # Lateral control is always closed-loop on the target (or current) lane centre.

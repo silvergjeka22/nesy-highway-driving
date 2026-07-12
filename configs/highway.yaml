@@ -188,8 +188,8 @@ finetune:
 metadrive:
   enabled: true
   map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
-  traffic_density: 0.1        # ~13 cars over the map, median gap ~40 m: enough targets
-                              # to overtake, still room to change lane and pass
+  traffic_density: 0.08       # ~9 cars over the map: enough targets to overtake,
+                              # with room to change lane and pass
   num_scenarios: 50
   horizon: 1000
   v_max: 15.0                 # max commandable speed [m/s]

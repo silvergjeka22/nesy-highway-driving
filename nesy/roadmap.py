@@ -146,13 +146,15 @@ def safety_shield(action, preds, fsm_state, cfg):
     allowed = admissible_actions(fsm_state, preds, cfg)
     if proposed in allowed:
         return ACTION_INDEX[proposed], fsm_state
-    return ACTION_INDEX[safest_fallback(preds, cfg, allowed)], fsm_state
+    return ACTION_INDEX[safest_fallback(preds, cfg, allowed, state=fsm_state)], fsm_state
 
 
-def safest_fallback(preds, cfg, allowed=None):
-    """Brake if unsafe, else hold lane."""
+def safest_fallback(preds, cfg, allowed=None, state=None):
+    """Brake if unsafe; in OVERTAKE_LEFT execute the pass; else hold lane."""
     if preds.get("too_close") or preds.get("off_road"):
         return "SLOWER"
+    if state == "OVERTAKE_LEFT" and allowed and "LANE_LEFT" in allowed:
+        return "LANE_LEFT"  # the FSM committed to the pass: execute it
     if allowed and "IDLE" in allowed:
         return "IDLE"
     return "SLOWER"
