@@ -181,6 +181,8 @@ def record_episodes(model, cfg, out_path, apply_shield, episode_seeds, min_secon
         env.unwrapped._record_video_wrapper = None
         env.close()
 
+    if min_seconds:  # same clip length for every config, so grids stay in sync
+        frames = frames[:int(min_seconds * fps)]
     print(f"[demo] clip: {len(frames)} frames @ {fps} fps = {len(frames) / fps:.1f}s", flush=True)
     return save_mp4(frames, out_path, fps=fps), total_ot, total_steps
 
