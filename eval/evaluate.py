@@ -242,13 +242,15 @@ def total_violation_rate(metrics):
 
 
 def select_nesy_method(metrics_by_name, cfg, baseline_key=None):
-    """Pick the NeSy config with fewest total violations that still overtakes.
+    """Pick the NeSy config with fewest total violations that is still a safe
+    overtaker: crashes no more than the baseline and keeps at least
+    ``select.min_overtake_frac`` of the baseline's overtakes.
     Returns (best_name, comparison_table)."""
     names = list(metrics_by_name)
     baseline_key = baseline_key or names[0]
     base = metrics_by_name[baseline_key]["summary"]
-    band = cfg.get("select", {}).get("within_return_pct", 0.10)
-    floor = base["overtakes"]["mean"] - abs(base["overtakes"]["mean"]) * band
+    frac = cfg.get("select", {}).get("min_overtake_frac", 0.5)
+    floor = base["overtakes"]["mean"] * frac
 
     table = []
     for n in names:

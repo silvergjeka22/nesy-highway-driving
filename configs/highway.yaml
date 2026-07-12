@@ -125,7 +125,7 @@ eval:
   video_fps: 10
 
 select:
-  within_return_pct: 0.10     # NeSy method selection band (Part 2)
+  min_overtake_frac: 0.5      # NeSy winner must keep >= this fraction of baseline overtakes
 
 # =============================================================================
 # PART 2 — NeSy rules (Maierhofer 2020, Table II, SI units)
@@ -199,7 +199,8 @@ metadrive:
   lidar_num_lasers: 72
   video_seconds: 30
   video_fps: 20
-  video_size: [800, 800]
+  video_size: [900, 500]     # top-down viewport [px]
+  video_scaling: 10.0        # top-down zoom [px per metre] — keeps the ego close
 
 cbf:
   enabled: true

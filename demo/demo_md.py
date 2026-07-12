@@ -53,8 +53,8 @@ def _tensor_numpy_compat(self, *args, **kwargs):
 _th.Tensor.numpy = _tensor_numpy_compat
 
 
-def draw_telemetry(frame, v, omega, fsm_state=None):
-    """Overlay speed, yaw-rate, and FSM state onto a video frame."""
+def draw_telemetry(frame, v, omega, fsm_state=None, overtakes=None, crashed=False):
+    """Overlay speed, yaw-rate, FSM state, overtake count (and CRASHED) onto a frame."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
@@ -67,67 +67,106 @@ def draw_telemetry(frame, v, omega, fsm_state=None):
     text = f"v = {v:5.2f} m/s\nomega = {omega:+.2f} rad/s"
     if fsm_state:
         text += f"\nFSM: {fsm_state}"
+    if overtakes is not None:
+        text += f"\novertakes: {overtakes}"
     pad = max(4, size // 3)
     box = draw.multiline_textbbox((pad, pad), text, font=font)
     draw.rectangle((0, 0, box[2] + pad, box[3] + pad), fill=(0, 0, 0))
     draw.multiline_text((pad, pad), text, fill=(255, 255, 255), font=font)
+    if crashed:
+        cb = draw.textbbox((0, 0), "CRASHED", font=font)
+        cw = cb[2] - cb[0]
+        x = (img.width - cw) // 2
+        draw.rectangle((x - pad, 0, x + cw + pad, cb[3] + pad), fill=(160, 0, 0))
+        draw.text((x, pad), "CRASHED", fill=(255, 255, 255), font=font)
     return np.asarray(img)
 
 
-def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps):
-    """Drive env, grab frames, print overtakes per episode, save MP4."""
+def _play_episode(model, cfg, env, grab_frame, seed, shield, max_frames):
+    """Play one seeded episode; return (frames, overtakes, steps, crashed)."""
+    env.reset(seed=int(seed))
+    fsm = cfg["fsm"]["initial_state"]
+    _, ahead = count_passes_md(env, set())
+    done = False
+    ot = steps = 0
+    bridge = {}
+    frames = []
+    info = {}
+    while not done and len(frames) < max_frames:
+        action, fsm = nesy_md_action(model, env, cfg, fsm, shield=shield, bridge=bridge)
+        obs, _, terminated, truncated, info = env.step(action)
+        passed, ahead = count_passes_md(env, ahead)
+        ot += passed
+        steps += 1
+        done = terminated or truncated
+        frame = grab_frame(env, obs)
+        if frame is not None:
+            frame = draw_telemetry(
+                frame, read_scene_md(env)["ego"]["v"],
+                float(action[1]) * cfg["metadrive"]["omega_max"],
+                fsm_state=fsm, overtakes=ot,
+                crashed=done and bool(info.get("crash", False)))
+            frames.append(np.asarray(frame))
+    return frames, ot, steps, bool(info.get("crash", False))
+
+
+def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps, best_of=None):
+    """Record episodes and save an MP4. With `best_of`, keep only the episode
+    with the most overtakes; otherwise concatenate until >= min_seconds."""
     target = int(min_seconds * fps)
     seed0 = int(cfg["eval_seeds"][0])
-    frames = []
-    total_ot = total_steps = 0
     try:
-        ep = 0
-        while len(frames) < target:
-            obs, _ = env.reset(seed=seed0 + ep)
-            fsm = cfg["fsm"]["initial_state"]
-            _, ahead = count_passes_md(env, set())
-            done = False
-            ot = steps = 0
-            bridge = {}
-            while not done and len(frames) < target:
-                action, fsm = nesy_md_action(model, env, cfg, fsm, shield=shield, bridge=bridge)
-                obs, _, terminated, truncated, _ = env.step(action)
-                passed, ahead = count_passes_md(env, ahead)
-                ot += passed
-                steps += 1
-                frame = grab_frame(env, obs)
-                if frame is not None:
-                    frame = draw_telemetry(
-                        frame, read_scene_md(env)["ego"]["v"],
-                        float(action[1]) * cfg["metadrive"]["omega_max"],
-                        fsm_state=fsm)
-                    frames.append(np.asarray(frame))
-                done = terminated or truncated
-            total_ot += ot
-            total_steps += steps
-            print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps", flush=True)
-            ep += 1
+        if best_of:
+            best = None
+            for i in range(best_of):
+                ep = _play_episode(model, cfg, env, grab_frame, seed0 + i, shield, target)
+                print(f"[demo] candidate seed {seed0 + i}: {ep[1]} overtakes in {ep[2]} steps"
+                      f"{'  (crashed)' if ep[3] else ''}", flush=True)
+                if best is None or (ep[1], ep[2]) > (best[1], best[2]):
+                    best = ep
+            frames, ot, steps, crashed = best
+            print(f"[demo] best episode: {ot} overtakes, {steps} steps, crashed={crashed} "
+                  f"({len(frames) / fps:.1f}s)", flush=True)
+        else:
+            frames = []
+            total_ot = total_steps = 0
+            ep = 0
+            while len(frames) < target:
+                ep_frames, ot, steps, _ = _play_episode(
+                    model, cfg, env, grab_frame, seed0 + ep, shield, target - len(frames))
+                frames.extend(ep_frames)
+                total_ot += ot
+                total_steps += steps
+                print(f"[demo] episode {ep + 1}: {ot} overtakes in {steps} steps", flush=True)
+                ep += 1
+            print(f"[demo] overtakes: {total_ot} in {total_steps} steps "
+                  f"({100.0 * total_ot / max(1, total_steps):.1f} per 100 steps)")
     finally:
         env.close()
-    print(f"[demo] overtakes: {total_ot} in {total_steps} steps "
-          f"({100.0 * total_ot / max(1, total_steps):.1f} per 100 steps)")
     return save_mp4(frames, out_path, fps=fps)
 
 
-def record_topdown(model, cfg, out_path, shield=True, min_seconds=30):
-    """Record the top-down 2D view (offscreen, CPU)."""
+def record_topdown(model, cfg, out_path, shield=True, min_seconds=30, best_of=None):
+    """Record the top-down 2D view (offscreen, CPU), zoomed on the ego."""
     md = cfg["metadrive"]
-    size = tuple(md.get("video_size", [800, 800]))
+    size = tuple(md.get("video_size", [900, 500]))
+    scaling = float(md.get("video_scaling", 10.0))
     env = make_env_md(cfg, render=True, seed=int(cfg["eval_seeds"][0]))
 
+    # The renderer clamps scaling to film_height/map_length, so the film must
+    # cover the whole map at the requested zoom or the view ends up far away.
+    bb = env.unwrapped.current_map.road_network.get_bounding_box()
+    film = int(scaling * (max(bb[1] - bb[0], bb[3] - bb[2]) + 20.0))
+
     def grab(env, obs):
-        return env.unwrapped.render(mode="top_down", window=False,
-                                    screen_size=size, film_size=(size[0] * 2, size[1] * 2))
+        return env.unwrapped.render(mode="top_down", window=False, screen_size=size,
+                                    film_size=(film, film), scaling=scaling)
 
-    return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
+    return _record(model, cfg, env, grab, out_path, shield, min_seconds,
+                   md.get("video_fps", 20), best_of=best_of)
 
 
-def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
+def record_3d(model, cfg, out_path, shield=True, min_seconds=30, best_of=None):
     """Record a 3D chase-camera video via panda3d offscreen rendering."""
     md = cfg["metadrive"]
     env = make_env_md(cfg, render=False, seed=int(cfg["eval_seeds"][0]), video_3d=True)
@@ -139,8 +178,8 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
             img = cam.perceive(
                 to_float=False,
                 new_parent_node=agent.origin,
-                position=(0, -7.5, 3.5),
-                hpr=(0, -15, 0),
+                position=(0, -6.0, 2.5),   # close chase cam: 6 m back, 2.5 m up
+                hpr=(0, -12, 0),
             )
             img = np.asarray(img, dtype=np.uint8)
             if img.ndim == 3 and img.shape[2] > 3:
@@ -152,7 +191,8 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30):
             print(f"[3d] frame grab failed: {e}", flush=True)
             return None
 
-    return _record(model, cfg, env, grab, out_path, shield, min_seconds, md.get("video_fps", 20))
+    return _record(model, cfg, env, grab, out_path, shield, min_seconds,
+                   md.get("video_fps", 20), best_of=best_of)
 
 
 def main():
@@ -164,6 +204,8 @@ def main():
     ap.add_argument("--out", default=None, help="output .mp4 path")
     ap.add_argument("--config", default="configs/highway.yaml")
     ap.add_argument("--seconds", type=float, default=None, help="min clip length")
+    ap.add_argument("--best-of", type=int, default=None,
+                    help="record only the best of N episodes (most overtakes)")
     args = ap.parse_args()
 
     cfg_path = args.config if os.path.isabs(args.config) else os.path.join(_REPO, args.config)
@@ -177,9 +219,11 @@ def main():
     print(f"recording >= {min_seconds:.0f}s (view={args.view}, shield={shield}) -> {out_path}")
 
     if args.view == "3d":
-        path = record_3d(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
+        path = record_3d(model, cfg, out_path, shield=shield,
+                         min_seconds=min_seconds, best_of=args.best_of)
     else:
-        path = record_topdown(model, cfg, out_path, shield=shield, min_seconds=min_seconds)
+        path = record_topdown(model, cfg, out_path, shield=shield,
+                              min_seconds=min_seconds, best_of=args.best_of)
 
     size = os.path.getsize(path) if path and os.path.exists(path) else 0
     if size > 0:
