@@ -107,7 +107,7 @@ qrdqn:
     net_arch: [256, 256]
     n_quantiles: 50
 
-# MCTS — logic-guided planning (Lab 4, slides 104-118)
+# MCTS — logic-guided planning (Lab 4)
 mcts:
   n_simulations: 20          # rollouts per decision step
   depth: 3                   # rollout horizon (steps)

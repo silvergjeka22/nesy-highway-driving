@@ -1,7 +1,7 @@
 """Lab 4 — MCTS with logical heuristics + velocity obstacles.
 
 Two components from the course:
-  * **MCTS** (slides 104-118) — Monte Carlo Tree Search with logic-guided rollouts.
+  * **MCTS** — Monte Carlo Tree Search with logic-guided rollouts.
     Uses a lightweight kinematic forward model (no env cloning) for fast planning.
   * **Velocity obstacles** — continuous "is this gap safe?" test for the (v, ω) action.
 """

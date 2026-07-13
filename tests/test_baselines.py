@@ -5,7 +5,7 @@ the three trainers end to end with checkpoint + training-curve CSV, the predicto
 seam, and the evaluation harness) in ~1-2 min on CPU. They never do
 real training; the shared-budget comparison runs in the notebook on Colab.
 
-Run:  python tests/test_baselines.py        (or: pytest tests/test_baselines.py)
+Run:  python tests/test_baselines.py or pytest
 """
 import os
 import sys

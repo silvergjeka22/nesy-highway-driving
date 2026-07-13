@@ -1,7 +1,7 @@
 """Debug script for MetaDrive bridge — run on Colab after loading cfg and model.
 
 Usage (in colab_3 notebook, after loading showcase model):
-    exec(open("tests/debug_metadrive.py").read())
+    exec(open("tests/debug_metadrive.py").read()) # directly on the notebook
 """
 import numpy as np
 from envs.metadrive_factory import (make_env_md, read_scene_md, read_kin_obs_md,
@@ -50,5 +50,5 @@ for step in range(300):
         break
 
 env.close()
-print(f"\n=== END DEBUG: {overtakes} overtakes, final v={ego['v']:.2f}, "
-      f"on_road={ego.get('on_road', True)} ===")
+print(f"\nEND DEBUG: {overtakes} overtakes, final v={ego['v']:.2f}, "
+      f"on_road={ego.get('on_road', True)}")

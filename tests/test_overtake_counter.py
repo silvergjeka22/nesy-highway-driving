@@ -1,12 +1,12 @@
 """Verify the overtake counter (envs.highway_factory.OvertakeCounter) counts the
 RIGHT number in scenarios where the correct answer is known exactly.
 
-Motivation: in the 30k RPPO run the overtakes/ep FELL as the crash rate fell, and
+Motivation: in the 20k PPO run the overtakes/ep FELL as the crash rate fell, and
 we needed to know whether that is a counting bug or real behaviour. These tests
 drive a fake env through scripted vehicle x-positions (so every overtake is
 hand-countable) and assert the wrapper's ``info['overtakes']`` matches.
 
-Run:  python tests/test_overtake_counter.py     (or: pytest tests/test_overtake_counter.py)
+Run:  python tests/test_overtake_counter.py oy pytest
 """
 import os
 import sys
