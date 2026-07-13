@@ -65,7 +65,7 @@ Drive**. The Drive checkpoints are the hand-off between notebooks.
 |---|---|---|---|
 | [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **RecurrentPPO vs DQN vs QR-DQN** to overtake aggressively, evaluate + compare, pick the **best** | `rppo.zip`/`dqn.zip`/`qrdqn.zip`/`part1_best.zip` **+ `part1_best.mp4`** + plots |
 | [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, compare the four configs, pick the best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
-| [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | run the **second-best** algorithm on **MetaDrive** via the labs (velocity action, CBF/VO) | metrics + **`part3_metadrive.mp4`** (3D) |
+| [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | run the Part-1 winner on **MetaDrive** via the labs (velocity action, CBF/VO): **bare vs +shield vs MCTS planning** | metrics + **`part3_bare/shield/mcts.mp4`** |
 
 ### Part 1 — baseline: RecurrentPPO vs DQN vs QR-DQN, save the best (`colab_1_baseline.ipynb`)
 
@@ -124,20 +124,22 @@ contrasts**, then compares them:
   crushes the hard-rule rows with zero retraining; the fine-tune teaches the soft ones. Save the
   NeSy checkpoint, plots, and `part2_nesy.mp4` (`demo/demo.py --shield`).
 
-### Part 3 — MetaDrive robotics lab: the second-best algorithm, made safe by the labs
+### Part 3 — MetaDrive robotics lab: three configs, made safe by the labs
 
-Ports the pipeline to **MetaDrive** (continuous control, 3D physics) by running a discrete Part-1
-policy through the robotics labs — deliberately the **second-best** algorithm from Part 1 (DQN if
-PPO won), because the showcase's point is that **the symbolic safety layer, not the policy,
-provides the safety**. The bridge: `read_scene_md` (SI scene adapter) → `read_kin_obs_md`
+Ports the pipeline to **MetaDrive** (continuous control, 3D physics) by running the Part-1 winner
+through the robotics labs — the showcase's point is that **the symbolic safety layer, not the
+policy, provides the safety**. The bridge: `read_scene_md` (SI scene adapter) → `read_kin_obs_md`
 (reconstructed highway observation) → model picks a manoeuvre → **FSM shield** → Lab-1
 `manoeuvre_to_cmd_vel` → continuous **velocity `(v, ω)`** (a robot's ROS `cmd_vel`) → **CBF (Lab 5)
-+ velocity obstacles (Lab 4)**. The same `predicates()` and rules are reused unchanged; the
-**"one rule, three encodings" agreement check** (MTL predicate ↔ discrete shield mask ↔ CBF
-barrier, all reducing to `gap < safe_distance`) **runs without MetaDrive**. Ends with a ≥30s **3D
-chase-camera video** recorded offscreen (`demo/demo_md.py`, GPU runtime; auto-falls back to
-top-down on CPU). MetaDrive needs Python ≤ 3.11 → the notebook installs the **condacolab
-Python-3.10 runtime** (one kernel restart, then Run all again).
++ velocity obstacles (Lab 4)**. Three configs are compared on the same seeds: **bare** (policy
+alone), **+shield** (policy + FSM + CBF/VO/LIDAR), and **MCTS** (Lab-4 logic-guided planning
+instead of the neural policy, under the same shield stack — no checkpoint at all). The same
+`predicates()` and rules are reused unchanged; the **"one rule, three encodings" agreement check**
+(MTL predicate ↔ discrete shield mask ↔ CBF barrier, all reducing to `gap < safe_distance`)
+**runs without MetaDrive**. Each evaluation records its best episode, so the notebook ends with
+**three top-down videos** (`part3_bare/shield/mcts.mp4`); `demo/demo_md.py --view 3d` replays any
+of them as a 3D chase-camera clip on a machine with a display. MetaDrive needs Python ≤ 3.11 → the
+notebook installs the **condacolab Python-3.10 runtime** (one kernel restart, then Run all again).
 
 ---
 
@@ -193,7 +195,7 @@ nesy-highway-driving/
 ├── notebooks/                    # the only place code executes
 │   ├── colab_1_baseline.ipynb    # Part 1  -> part1_best.mp4
 │   ├── colab_2_nesy.ipynb        # Part 2  -> part2_nesy.mp4   (XAI)
-│   └── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4 (3D)
+│   └── colab_3_metadrive.ipynb   # Part 3  -> part3_{bare,shield,mcts}.mp4
 ├── envs/
 │   ├── highway_factory.py        # create_environment(cfg), read_scene(env), reward wrappers [Parts 1-2]
 │   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), the Lab-1 bridge     [Part 3]

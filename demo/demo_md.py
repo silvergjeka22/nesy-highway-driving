@@ -129,6 +129,8 @@ def _record(model, cfg, env, grab_frame, out_path, shield, min_seconds, fps,
     concatenate episodes until >= min_seconds."""
     target = int(min_seconds * fps)
     seed0 = int(cfg["eval_seeds"][0])
+    if hasattr(model, "set_eval_env"):
+        model.set_eval_env(env)  # MCTSPolicy plans on the live env's scene
     try:
         if episode_seed is not None:
             frames, ot, lc, steps, crashed = _play_episode(
@@ -233,8 +235,9 @@ def record_3d(model, cfg, out_path, shield=True, min_seconds=30,
 
 def main():
     ap = argparse.ArgumentParser(description="Record a MetaDrive video (discrete model via Lab-1 bridge).")
-    ap.add_argument("--model", required=True, help="discrete checkpoint (e.g. dqn.zip)")
-    ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn"])
+    ap.add_argument("--model", default=None,
+                    help="discrete checkpoint (e.g. dqn.zip; not needed for --algo mcts)")
+    ap.add_argument("--algo", default="dqn", choices=["ppo", "dqn", "qrdqn", "mcts"])
     ap.add_argument("--no-shield", action="store_true", help="disable FSM shield + CBF/VO filter")
     ap.add_argument("--view", default="topdown", choices=["topdown", "3d"])
     ap.add_argument("--out", default=None, help="output .mp4 path")
@@ -250,10 +253,19 @@ def main():
     cfg = load_config(cfg_path)
     min_seconds = args.seconds if args.seconds is not None else cfg["metadrive"].get("video_seconds", 30)
     shield = not args.no_shield
-    out_path = args.out or (os.path.splitext(args.model)[0] + "_metadrive.mp4")
+    out_path = args.out or (os.path.splitext(args.model)[0] + "_metadrive.mp4"
+                            if args.model else "mcts_metadrive.mp4")
 
-    print(f"loading {args.algo} model (Lab-1 bridge): {args.model}")
-    model = load_model(args.model, args.algo)
+    if args.algo == "mcts":
+        from labs.lab4_velocity_obstacles import MCTSPolicy
+        from envs.metadrive_factory import read_scene_md
+        print("using MCTS planning (Lab-1 bridge, no checkpoint)")
+        model = MCTSPolicy(cfg, scene_fn=read_scene_md)
+    elif args.model:
+        print(f"loading {args.algo} model (Lab-1 bridge): {args.model}")
+        model = load_model(args.model, args.algo)
+    else:
+        ap.error("--model is required unless --algo mcts")
     print(f"recording >= {min_seconds:.0f}s (view={args.view}, shield={shield}) -> {out_path}")
 
     if args.view == "3d":

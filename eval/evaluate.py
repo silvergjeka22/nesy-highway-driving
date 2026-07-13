@@ -184,6 +184,8 @@ def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True, video_out=None):
     eps_per_seed = int(cfg["metadrive"].get("episodes_per_seed",
                                             cfg["eval"]["episodes_per_seed"]))
     env = make_env_md(cfg, render=bool(video_out))
+    if hasattr(part2_model, "set_eval_env"):
+        part2_model.set_eval_env(env)  # MCTSPolicy plans on the live env's scene
     grab = None
     if video_out:
         from demo.demo_md import make_topdown_grab

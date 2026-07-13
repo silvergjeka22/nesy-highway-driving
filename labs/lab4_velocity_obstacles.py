@@ -72,7 +72,9 @@ def _sim_scene(scene, action_idx, dt=0.5):
     new_lane = ego["lane"] + _DLANE[action_idx]
     n_lanes = scene["lanes_count"]
     new_lane = max(0, min(n_lanes - 1, new_lane))
-    new_y = new_lane * _LANE_WIDTH
+    # Real lane-centre y when the scene provides it (MetaDrive), else highway grid.
+    centres = ego.get("lane_centres") or []
+    new_y = centres[new_lane] if new_lane < len(centres) else new_lane * _LANE_WIDTH
 
     others_next = []
     for o in scene.get("others", []):
@@ -88,6 +90,9 @@ def _sim_scene(scene, action_idx, dt=0.5):
         "lane": new_lane, "on_road": 0 <= new_lane < n_lanes,
         "heading": ego.get("heading", 0.0),
     }
+    if centres:
+        new_ego["lane_centres"] = centres
+        new_ego["lanes_count"] = ego.get("lanes_count", n_lanes)
     next_scene = {"ego": new_ego, "others": others_next, "lanes_count": n_lanes}
 
     crashed = any(
@@ -98,15 +103,19 @@ def _sim_scene(scene, action_idx, dt=0.5):
     return next_scene, reward, crashed
 
 
-def mcts_action(env, cfg):
+def mcts_action(env, cfg, scene_fn=None):
     """Pick a discrete action via MCTS with logic-guided rollouts.
 
     Uses a lightweight kinematic forward model instead of stepping the real env,
     so planning is fast (~1ms per decision vs ~11s with env.step).
+    ``scene_fn`` extracts the SI scene dict (default: highway read_scene; pass
+    ``read_scene_md`` to plan on MetaDrive).
     """
     from envs.highway_factory import read_scene
     from nesy.roadmap import predicates, ACTIONS
     from labs.lab3_fsm import admissible_actions
+
+    scene_fn = scene_fn or read_scene
 
     mc = cfg.get("mcts", {})
     n_sims = mc.get("n_simulations", 20)
@@ -115,7 +124,7 @@ def mcts_action(env, cfg):
     gamma = mc.get("gamma", 0.98)
     n_actions = len(ACTIONS)
 
-    scene = read_scene(env)
+    scene = scene_fn(env)
 
     returns = np.zeros(n_actions)
     counts = np.zeros(n_actions)
@@ -160,15 +169,16 @@ def mcts_action(env, cfg):
 class MCTSPolicy:
     """SB3-compatible predict() adapter for MCTS planning (no trained model needed)."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, scene_fn=None):
         self.cfg = cfg
+        self.scene_fn = scene_fn
         self._env = None
 
     def set_eval_env(self, env):
-        """Called by evaluate() so MCTS can clone the env for simulations."""
+        """Called by evaluate() so MCTS can read scenes from the live env."""
         self._env = env
 
     def predict(self, obs, deterministic=True):
         if self._env is None:
             raise RuntimeError("MCTSPolicy needs set_eval_env() before predict()")
-        return np.array(mcts_action(self._env, self.cfg)), None
+        return np.array(mcts_action(self._env, self.cfg, self.scene_fn)), None

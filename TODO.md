@@ -37,7 +37,11 @@ runnable end-to-end; the open items are stretch goals.
       schema), `read_kin_obs_md` (reconstructed highway observation).
 - [x] The Lab-1 bridge (`nesy_md_action`): discrete model → FSM shield → `manoeuvre_to_cmd_vel`
       → CBF (Lab 5) + velocity obstacles (Lab 4) → MetaDrive step; overtakes counted on MetaDrive.
-- [x] **Showcase = the second-best Part-1 algorithm** (the safety comes from the symbolic layer).
+- [x] **Showcase = the Part-1 winner** (the safety comes from the symbolic layer).
+- [x] **Three-config comparison**: bare / +shield (FSM+CBF/VO/LIDAR) / **MCTS** (Lab-4
+      logic-guided planning instead of the neural policy, same shield stack). Each eval
+      records its best episode -> `part3_bare/shield/mcts.mp4`, all three shown in the
+      notebook; `demo_md.py --algo mcts` replays the MCTS config (topdown or 3D).
 - [x] "One rule, three encodings" agreement check (`rule_encoding_agreement`) — runs without
       MetaDrive.
 - [x] **3D video fixed**: `demo/demo_md.py` uses an exact-size `RGBCamera` (the `main_camera`
