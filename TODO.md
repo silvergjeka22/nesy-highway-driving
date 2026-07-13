@@ -27,6 +27,4 @@ full explanation and the results. Short summary of the completed work:
   and a math filter — all agree.
 
 ## Not included (on purpose)
-- Two paper rules — RI3 (no U-turn) and RI4 (emergency lane) — need extra map data the simulator does
-  not provide.
 - The full-optimisation version of the safety filter (a simple version is used).

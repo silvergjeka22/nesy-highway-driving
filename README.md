@@ -28,9 +28,9 @@ The notebooks run in order. Each one saves its result to Google Drive, and the n
 
 ---
 
-## The main idea (from the lecture)
+## The main idea
 
-Two ideas from the course shape the whole project:
+Two ideas shape the whole project:
 
 - **System 1 / System 2.** The trained neural network is fast, automatic thinking (System 1) — but a
   black box. The traffic rules are slow, careful thinking (System 2) — clear and checkable.
@@ -192,7 +192,7 @@ nesy-highway-driving/
 ├── labs/                  # the five course labs
 ├── eval/                  # evaluation + plots
 ├── demo/                  # standalone scripts that record the videos
-└── paper/                 # the traffic-rule papers + the lecture slides
+└── paper/                 # the traffic-rule papers
 ```
 
 **Conventions.** The `.py` files hold functions only — the notebooks are the only place code runs.
@@ -203,10 +203,8 @@ test runs are used for every algorithm and every setup, so all comparisons are f
 
 ## What is simplified (kept honest)
 
-To keep the project focused, a few things are deliberately left simple or out — and are noted openly:
+To keep the project focused, a couple of things are kept simple — and are noted openly:
 
-- Two rules from the papers (**RI3** "no U-turn" and **RI4** "keep the emergency lane clear") are
-  **not** implemented — they need extra map information the simulator does not provide.
 - On MetaDrive, the "no stopping" (RI1) and "no overtaking on the right" (RI2) counts look very high.
   This is a **units issue, not a real failure**: those rules' thresholds were set for highway speeds
   (~30 m/s) and the robot drives much slower (~8 m/s). The rule text is the same; only the numbers
@@ -222,5 +220,3 @@ To keep the project focused, a few things are deliberately left simple or out �
   flow, no stopping, no overtaking on the right. Used in Parts 1–2. (PDF in `paper/`.)
 - **Intersection traffic rules** — Maierhofer et al., *IEEE IV 2022* — used as the basis for Part 3.
   (PDF in `paper/`.)
-- **XAI · Neuro-Symbolic AI lecture** — Dr. Daniele Meli — System 1/2, shielding vs reward shaping.
-  The conceptual basis of the project.
