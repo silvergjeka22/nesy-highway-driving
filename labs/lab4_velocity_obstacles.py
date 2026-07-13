@@ -50,10 +50,7 @@ def gap_is_safe(ego, neighbours, cfg, horizon=None, radius=None):
     return True
 
 
-# =============================================================================
-# MCTS — Monte Carlo Tree Search with logic-guided rollouts (slides 104-118)
-# =============================================================================
-
+# MCTS — Monte Carlo Tree Search with logic-guided rollouts
 _LANE_WIDTH = 4.0
 _CAR_LENGTH = 5.0
 _DV = {0: 0.0, 1: 0.0, 2: 0.0, 3: 4.0, 4: -4.0}

@@ -5,7 +5,6 @@ runnable end-to-end; the open items are stretch goals.
 
 ---
 
-
 ### Part 1 — baseline (highway-env)
 - [x] `create_environment` + `read_scene` + overtake-counter / reward-shaping wrappers.
 - [x] **Aggressive-overtaker reward**: `normalize_reward: false` (speed is the only earner),
@@ -59,24 +58,3 @@ runnable end-to-end; the open items are stretch goals.
       `evaluate(action_filter=)`, `metadrive.ppo` config block.
 
 ---
-
-## ⏳ Remaining (stretch)
-
-- [ ] Intersection predicates (`nesy/roadmap.py::intersection_predicates`) — needs a MetaDrive
-      intersection map + stop-line/light/priority state; FSM states `STOP_SIGN_WAIT`/`YIELD`/
-      `LIGHT_STOP` masks are placeholders until then.
-- [ ] Replace the 1-D CBF projection (`labs/lab5_cbf.py`) with the full QP.
-- [ ] `RI3` (U-turn: needs a reference path) and `RI4` (emergency lane: needs a lane-type map).
-- [ ] **Differentiable logic** — fuzzy / Łukasiewicz predicates as a smooth gradient signal.
-- [ ] **Symbolic distillation** — distil the policy into a human-readable rule set over the
-      predicates, audited by the independent monitor.
-
----
-
-## 📝 Notes
-- **Run order:** Part 1 → Part 2 → Part 3 (each loads the previous checkpoints from Drive).
-- **Private repo:** notebooks clone via a GitHub token; push changes before re-running on Colab,
-  since Colab runs the *cloned* `.py` files, not your local edits. The notebooks currently pull
-  `BRANCH = "part3"` — switch to `main` after merging.
-- **Don't confound the comparison:** always count violations with the independent monitor, never
-  the reward/shield the agent optimises.
