@@ -201,19 +201,6 @@ test runs are used for every algorithm and every setup, so all comparisons are f
 
 ---
 
-## What is simplified (kept honest)
-
-To keep the project focused, a couple of things are kept simple — and are noted openly:
-
-- On MetaDrive, the "no stopping" (RI1) and "no overtaking on the right" (RI2) counts look very high.
-  This is a **units issue, not a real failure**: those rules' thresholds were set for highway speeds
-  (~30 m/s) and the robot drives much slower (~8 m/s). The rule text is the same; only the numbers
-  would need re-tuning for the slower world.
-- The safety filter (Control Barrier Function) is a simple one-dimensional version, not the full
-  optimisation.
-
----
-
 ## Papers
 
 - **Interstate traffic rules** — Maierhofer et al., *IEEE IV 2020* — safe distance, braking, speed,
