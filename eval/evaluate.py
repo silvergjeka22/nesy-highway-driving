@@ -168,7 +168,7 @@ def summarise(rows, count_violations):
     return summary
 
 
-# ---- Part 3: MetaDrive evaluation ------------------------------------------
+# Part 3: MetaDrive evaluation
 
 def evaluate_nesy_md(part2_model, cfg, seeds=None, shield=True, video_out=None):
     """Evaluate a discrete model on MetaDrive via the Lab-1 bridge.
@@ -287,7 +287,7 @@ def run_nesy_md_episode(model, env, seed, cfg, shield, grab=None):
     return row
 
 
-# ---- Part 2: rank NeSy methods ---------------------------------------------
+# Part 2: rank NeSy methods
 
 def total_violation_rate(metrics):
     """Sum of all per-rule violation rates."""
