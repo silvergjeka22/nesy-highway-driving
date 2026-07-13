@@ -39,7 +39,10 @@ def fsm_transition(state, preds, cfg):
 
     if state in ("CRUISE", "FOLLOW"):
         if gap < f["follow_gap"]:
-            if preds.get("safe_gap_left"):
+            # Overtake only a leader that actually impedes: it is slower than us
+            # (we are closing) or we are already boxed in close behind it.
+            impeded = preds.get("leader_slower") or gap < 0.6 * f["follow_gap"]
+            if impeded and preds.get("safe_gap_left"):
                 return "OVERTAKE_LEFT"
             return "FOLLOW"
         return "CRUISE"
@@ -70,9 +73,15 @@ def admissible_actions(state, preds, cfg):
 
     allowed = list(ALL_ACTIONS)
 
-    # RG1 + RG3: gate acceleration.
-    if preds.get("too_close") or preds.get("over_speed_limit"):
+    # RG1: gate acceleration on the leader gap.
+    if preds.get("too_close"):
         _drop(allowed, "FASTER")
+
+    # RG3: above the legal limit the car must actually decelerate — vetoing only
+    # FASTER would let it cruise at an illegal speed forever (IDLE keeps speed).
+    if preds.get("over_speed_limit"):
+        _drop(allowed, "FASTER")
+        _drop(allowed, "IDLE")
 
     # RG1: gate lane changes on the target-lane safe gap.
     if not preds.get("safe_gap_left"):
@@ -80,9 +89,14 @@ def admissible_actions(state, preds, cfg):
     if not preds.get("safe_gap_right"):
         _drop(allowed, "LANE_RIGHT")
 
-    # State preference: while overtaking, do not voluntarily merge right.
+    # State preference: OVERTAKE_LEFT's manoeuvre IS the pass — no merging right,
+    # no coasting, no accelerating into the leader. Only the lane change (when
+    # the gap is safe) or braking remain admissible.
     if state == "OVERTAKE_LEFT":
         _drop(allowed, "LANE_RIGHT")
+        if "LANE_LEFT" in allowed:
+            _drop(allowed, "IDLE")
+            _drop(allowed, "FASTER")
 
     return allowed or ["SLOWER"]
 

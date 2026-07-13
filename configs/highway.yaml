@@ -1,35 +1,22 @@
-# =============================================================================
-# Single source of truth for ALL FOUR PARTS (see README.md for the full plan).
-# Nothing is hard-coded in the .py modules — every quantity lives here.
-# Loaded once per notebook via utils.load_config().
-#
-#   Part 1 (baseline) ....... env, shaping, ppo, dqn, eval
-#   Part 2 (NeSy) ........... rules{}, fsm{}            -> nesy/ + labs/lab3,lab4
-#   Part 3 (MetaDrive) ...... metadrive{}, cbf{}, vo{}  -> envs/metadrive_factory + labs/lab1,2,5
-#   Part 4 (race) ........... race{}                    -> eval/record_race_video
-#
-# Rule parameters are taken from Maierhofer et al., "Formalization of Interstate
-# Traffic Rules in Temporal Logic", IEEE IV 2020 (Table II). See README.md §4.
-# =============================================================================
+# Single config for all THREE PARTS (see README.md).
+# Part 1 (baseline) — env, shaping, train, ppo, dqn, qrdqn, eval
+# Part 2 (NeSy)     — rules, fsm, finetune
+# Part 3 (MetaDrive) — metadrive, cbf, vo
+# Rule parameters: Maierhofer et al., IEEE IV 2020, Table II.
 
-# ---- Reproducibility ---------------------------------------------------------
 seed: 42
 eval_seeds: [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]
 
-# ---- Compute + logging (shared by all trainers) ------------------------------
-device: cpu           # small MLP policies — CPU is as fast as GPU here. ('auto'/'cuda' also work.)
-print_freq: 200       # progress print every N steps (ep_rew_mean, steps/s, ETA, best-ckpt).
+device: cpu
+print_freq: 200
 
-# ---- Where results go (mirrored to Drive from the notebooks) -----------------
 paths:
   drive_root: /content/drive/MyDrive/nesy-highway-driving
-  checkpoints: checkpoints      # <root>/checkpoints/{ppo,dqn,ppo_nesy,md_ppo}.zip
-  videos: videos                # <root>/videos/*.mp4
-  metrics: metrics              # <root>/metrics/*.json (+ curves/<algo>/progress.csv, *.png)
+  checkpoints: checkpoints
+  videos: videos
+  metrics: metrics
 
-# =============================================================================
 # PART 1 — environment + baselines
-# =============================================================================
 env:
   id: highway-v0
   config:
@@ -43,44 +30,47 @@ env:
     action:
       type: DiscreteMetaAction
     lanes_count: 4
-    vehicles_count: 25        # quick-run: fewer NPCs = faster stepping (raise to ~50 for full)
+    vehicles_count: 50
     vehicles_density: 1.0
     controlled_vehicles: 1
     duration: 40
-    policy_frequency: 1
-    simulation_frequency: 10   # quick-run: fewer physics substeps/step (raise to 15 for full)
+    policy_frequency: 2
+    simulation_frequency: 10
     collision_reward: -1.0
-    right_lane_reward: 0.1
-    high_speed_reward: 0.4
+    right_lane_reward: 0.0
+    high_speed_reward: 0.5
     lane_change_reward: 0.0
     reward_speed_range: [20, 30]
-    normalize_reward: true
+    normalize_reward: false
     offroad_terminal: true
     render_agent: true
     screen_width: 600
     screen_height: 150
     scaling: 5.5
 
-# Light reward shaping (Part 1). Kept minimal so it does not confound the
-# Part-2 NeSy comparison (the plan's explicit warning).
 shaping:
   enabled: true
-  overtake_bonus: 0.5       # reward passing traffic (native step reward is ~0-0.5, so this
-                            # makes each overtake clearly worth it) — still light vs a full
-                            # return, so it doesn't confound the Part-2 NeSy comparison.
-  offroad_penalty: 0.10     # crash/off-road penalty kept intact.
+  overtake_bonus: 7.0         # aggression dial — each car passed
+  lane_change_bonus: 1.0      # paid only when escaping a blocked lane
+  survival_bonus: 0.02        # per-step tiebreak, not an income
+  blocked_penalty: 0.15       # per step stuck behind a close leader
+  offroad_penalty: 0.5
+  collision_penalty: 18.0     # must outweigh passes earned in a crash-sprint
+
+train:
+  total_timesteps: 20000      # shared budget for all three algorithms
 
 ppo:
   policy: MlpPolicy
-  total_timesteps: 1000 #150000    # full baseline (needed to actually learn to overtake). Use ~2000 for a quick smoke test.
-  learning_rate: 0.0005
-  n_steps: 512               # rollout length before each update
-  batch_size: 256
+  learning_rate: 0.0003
+  n_steps: 256
+  batch_size: 64
   n_epochs: 10
-  gamma: 0.95
+  gamma: 0.98
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.01
+  ent_coef: 0.10              # start of linear decay — high to force lane-change exploration
+  ent_coef_final: 0.04        # end of linear decay — still substantial at end of training
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy_kwargs:
@@ -88,153 +78,138 @@ ppo:
 
 dqn:
   policy: MlpPolicy
-  total_timesteps: 1000 #150000    # full baseline (same budget as PPO for a fair comparison). Use ~2000 for a quick smoke test.
-  learning_rate: 0.0005
+  learning_rate: 0.00025
   buffer_size: 50000
-  learning_starts: 100 #1000      # fill the replay buffer a little before learning
-  batch_size: 64
-  gamma: 0.95
-  train_freq: 4
+  learning_starts: 500
+  batch_size: 128
+  gamma: 0.98
+  train_freq: 1
   gradient_steps: 1
-  target_update_interval: 250 #1000  # steps between target-network syncs
-  exploration_fraction: 0.2
-  exploration_final_eps: 0.05
+  target_update_interval: 500
+  exploration_fraction: 0.6
+  exploration_final_eps: 0.10
   policy_kwargs:
     net_arch: [256, 256]
+
+qrdqn:
+  policy: MlpPolicy
+  learning_rate: 0.00025
+  buffer_size: 50000
+  learning_starts: 500
+  batch_size: 128
+  gamma: 0.98
+  train_freq: 1
+  gradient_steps: 1
+  target_update_interval: 500
+  exploration_fraction: 0.6
+  exploration_final_eps: 0.10
+  policy_kwargs:
+    net_arch: [256, 256]
+    n_quantiles: 50
+
+# MCTS — logic-guided planning (Lab 4)
+mcts:
+  n_simulations: 20          # rollouts per decision step
+  depth: 3                   # rollout horizon (steps)
+  p_heuristic: 0.7           # probability of picking from admissible actions
+  gamma: 0.98                # discount factor for rollout returns
 
 eval:
   episodes_per_seed: 5
   deterministic: true
-  video_episodes: 1          # episodes per video when no min length is requested
-  video_seconds: 30          # evaluate() saves a clip at least this long (PPO and DQN)
-  video_max_episodes: 60     # cap on episodes stitched together to reach video_seconds
-                             # (high enough that even DQN's short crashed episodes hit 30s)
+  video_episodes: 1
+  video_seconds: 30
+  video_max_episodes: 60
   video_fps: 10
 
-# Best-model selection rule (Part 1) — explicit, not arbitrary. Among models
-# whose mean return is within `within_return_pct` of the top, pick by `rule`.
 select:
-  within_return_pct: 0.10    # 10% band below the top mean return
-  rule: min_crash_rate       # safety-first: lowest crash rate wins (tie -> higher return)
+  min_overtake_frac: 0.5      # NeSy winner must keep >= this fraction of baseline overtakes
 
-# =============================================================================
-# PART 2 — NeSy rules (predicates -> shield -> logic-shaped reward)
-# Parameter values from Maierhofer 2020, Table II (SI units). car_length and the
-# highway-env-scaled v_max are adapted to the simulator; everything else matches
-# the paper so each predicate is traceable to a formula. See README.md §4.
-# =============================================================================
+# PART 2 — NeSy rules (Maierhofer 2020, Table II, SI units)
 rules:
   enabled: true
-  car_length: 5.0           # vehicle length for gap geometry [m]
-  d_near: 10.0              # "near" longitudinal threshold [m]
+  car_length: 5.0             # vehicle length [m]
+  d_near: 10.0                # "near" threshold [m]
 
-  # --- RG1 safe distance / safe gap ---
-  t_d: 0.3                  # reaction/delay time [s]                 (Table II)
-  a_min_ego: -10.0         # max decel, ego [m/s^2]                  (Table II)
-  a_min_other: -10.5       # max decel, leader [m/s^2]               (Table II)
-  t_c: 3.0                 # cut-in observation window [s]           (Table II)
+  # RG1 safe distance
+  t_d: 0.3                   # reaction time [s]
+  a_min_ego: -10.0            # max decel, ego [m/s²]
+  a_min_other: -10.5          # max decel, leader [m/s²]
+  t_c: 3.0                   # cut-in window [s]
 
-  # --- RG2 unnecessary braking ---
-  a_abrupt: -2.0           # abrupt-braking accel threshold [m/s^2]  (Table II)
+  # RG2 unnecessary braking
+  a_abrupt: -2.0              # abrupt-braking threshold [m/s²]
   a_max_ego: 5.0
 
-  # --- RG3 speed limit ---
-  v_max: 25.0              # lane speed limit [m/s]. Below highway-env's 30 m/s top target
-                           # speed so "over the limit" is actually observable (the ego's
-                           # discrete target speeds are {20, 25, 30}).
-  v_su: 36.66              # suggested speed if no limit [m/s]        (Table II)
+  # RG3 speed limit
+  v_max: 25.0                 # lane speed limit [m/s]
+  v_su: 36.66                 # suggested speed [m/s]
 
-  # --- RG4 preserve flow ---
-  delta_v_fl: 4.0          # slow-driving margin below the limit [m/s]; ego at the 20 m/s
-                           # target (< v_max - delta_v_fl = 21) counts as impeding flow.
+  # RG4 preserve flow
+  delta_v_fl: 4.0             # slow-driving margin [m/s]
 
-  # --- RI1 no stopping ---
-  v_err: 0.01              # standstill tolerance [m/s]              (Table II)
-  v_stall: 18.0            # highway-env "near standstill": below the ego's slowest normal
-                           # target (20 m/s) it was forced to crawl — a forbidden near-stop
-                           # (highway-env never fully stops).
+  # RI1 no stopping
+  v_err: 0.01                 # standstill tolerance [m/s]
+  v_stall: 18.0               # near-standstill threshold [m/s]
 
-  # --- RI2 no passing on the right (exceptions: queue/slow/congestion) ---
-  v_con: 2.78              # congestion max velocity [m/s]           (Table II)
-  v_smt: 8.33              # slow-moving-traffic velocity [m/s]      (Table II)
-  v_qv: 16.67              # vehicle-queue velocity [m/s]            (Table II)
-  n_con: 3                 # min vehicles to count as congestion     (Table II)
-  slightly_higher_speed: 2.78   # tolerance for "only slightly faster" [m/s]
+  # RI2 no passing on the right
+  v_con: 2.78                 # congestion velocity [m/s]
+  v_smt: 8.33                 # slow-moving traffic [m/s]
+  v_qv: 16.67                # vehicle-queue velocity [m/s]
+  n_con: 3                   # min vehicles for congestion
+  slightly_higher_speed: 2.78 # tolerance [m/s]
 
-  # --- RI3 no U-turn / reverse ---
-  delta_theta_uturn: 1.57  # U-turn orientation threshold [rad]      (Table II)
+  # RI3 no U-turn
+  delta_theta_uturn: 1.57     # orientation threshold [rad]
 
-  # --- soft-heuristic penalty weights for the logic-shaped reward (Step C) ---
+  # Soft-rule penalty weights (logic-shaped reward, Step C)
   lambda:
-    RI2: 0.50              # passing on the right
-    RG4: 0.30              # impeding flow
-    RG2: 0.30              # abrupt braking
-    overtaken_accel: 0.20  # accelerating while being overtaken
+    RI2: 0.50
+    RG4: 0.30
+    RG2: 0.30
 
-# Finite-state machine (Lab 3) — the symbolic manoeuvre layer / shield host.
 fsm:
   initial_state: CRUISE
   states: [CRUISE, FOLLOW, OVERTAKE_LEFT, MERGE, EMERGENCY_STOP]
-  follow_gap: 25.0          # below this leader gap -> FOLLOW [m]
-  emergency_gap: 8.0        # below this -> EMERGENCY_STOP [m]
+  follow_gap: 25.0            # FOLLOW trigger [m]
+  emergency_gap: 5.0          # EMERGENCY_STOP trigger [m] — below the CBF's natural
+                              # following distance, so steady following isn't "emergency"
 
-# Warm-start fine-tune for the logic-shaped reward (Step C). Lower LR, fewer
-# steps than Part 1 — the genuine "fine-tune".
 finetune:
-  total_timesteps: 1000      # quick smoke run for now (raise to ~60000 for a full fine-tune)
+  total_timesteps: 3000
   learning_rate: 0.0001
 
-# =============================================================================
-# PART 3 — MetaDrive (continuous velocity action) + CBF / velocity obstacles
-# MetaDrive-specific APIs that were not available when writing are marked TODO
-# in envs/metadrive_factory.py and the labs.
-# =============================================================================
+# PART 3 — MetaDrive + CBF / velocity obstacles
 metadrive:
   enabled: true
-  map: "SSSS"               # straight segments (good for overtaking + racing)
-  traffic_density: 0.2
+  map: "SSSSSSSSSS"           # 10 straight blocks (~650 m): room for a 60s+ episode
+  traffic_density: 0.08       # ~9 cars over the map: enough targets to overtake,
+                              # with room to change lane and pass
   num_scenarios: 50
   horizon: 1000
-  # Continuous velocity action (Lab 1 cmd_vel): a = (v, omega).
-  v_max: 10.0               # max linear speed [m/s]  (robot scale)
-  omega_max: 0.6            # max angular speed [rad/s]
-  use_lidar: true
+  episodes_per_seed: 2        # MetaDrive episodes are long (~1000 steps): 10 seeds x 2
+                              # = 20 episodes per config keeps the eval under ~20 min
+  v_max: 15.0                 # max commandable speed [m/s]
+  omega_max: 0.6              # max angular speed [rad/s]
+  max_steer: 0.3              # cap steering fraction (1.0 = full lock)
+  obs_speed_scale: 2.5        # MetaDrive->highway speed scaling: the model's preferred
+                              # 25-30 highway-m/s zone maps to 10-12 m/s here, well above
+                              # NPC free-flow (~8.3) so it catches traffic and passes it
+  obs_x_offset: 175.0         # align ego x with highway-env start (~180 m)
   lidar_num_lasers: 72
-  ppo:
-    policy: MlpPolicy
-    total_timesteps: 300000
-    learning_rate: 0.0003
-    n_steps: 2048
-    batch_size: 256
-    n_epochs: 10
-    gamma: 0.99
-    gae_lambda: 0.95
-    clip_range: 0.2
-    ent_coef: 0.0
-    policy_kwargs:
-      net_arch: [256, 256]
-    verbose: 1
+  video_seconds: 30
+  video_fps: 20
+  video_size: [900, 500]     # top-down viewport [px]
+  video_scaling: 10.0        # top-down zoom [px per metre] — keeps the ego close
 
-# Control Barrier Function (Lab 5) — continuous safety filter on (v, omega).
 cbf:
   enabled: true
-  d_safe_min: 5.0           # minimum safe gap [m] -> h(x) = gap - d_safe_min
-  gamma: 1.0                # class-K gain for h_dot >= -gamma * h
-  v_max: 10.0
+  gamma: 1.0                  # barrier class-K gain
+  v_max: 12.0                 # RG3 speed limit [m/s]
+  v_min: 2.0                  # RI1 min speed [m/s] — low enough to yield in a squeeze
   omega_max: 0.6
 
-# Velocity Obstacles / RVO (Lab 4) — continuous safe-gap + fallback avoidance.
 vo:
   enabled: true
-  time_horizon: 3.0         # look-ahead [s]
-  radius: 1.5               # combined vehicle radius [m]
-
-# =============================================================================
-# PART 4 — head-to-head race: baseline agent vs NeSy agent
-# =============================================================================
-race:
-  seeds: [2000, 2001, 2002, 2003, 2004]
-  horizon: 1000
-  winner_metric: distance   # "distance" travelled, or "overtakes"
-  video_seconds: 30
-  sim: highway              # "highway" (Parts 1-2 models) or "metadrive"
+  time_horizon: 3.0           # look-ahead [s]
+  radius: 1.5                 # combined vehicle radius [m]

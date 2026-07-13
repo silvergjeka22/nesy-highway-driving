@@ -1,11 +1,3 @@
-"""Plots for the notebooks: training curves, eval comparison, rule violations.
-
-Function-only. Reads the CSV training logs written by ``agents.baselines``
-(``metrics/curves/<tag>/progress.csv``) and the metric dicts returned by
-``eval.evaluate.evaluate``. Every figure is returned (for inline display) and
-optionally saved to Drive as a PNG. The notebooks call these.
-"""
-
 import os
 
 import numpy as np
@@ -15,64 +7,62 @@ import matplotlib.pyplot as plt
 from utils import curve_dir, drive_path
 
 
-# =============================================================================
-# Part 1 — training curves (PPO vs DQN)
-# =============================================================================
 def load_curve(cfg, tag):
-    """Load one model's training curve from SB3's ``progress.csv``.
-
-    Returns a frame with columns ``t`` (timesteps), ``rew`` (ep_rew_mean) and
-    ``len`` (ep_len_mean), or ``None`` if the log is missing.
-    """
+    """Load a training curve CSV into a DataFrame with standardised column names."""
     csv = os.path.join(curve_dir(cfg, tag), "progress.csv")
     if not os.path.exists(csv):
         return None
     df = pd.read_csv(csv)
-    cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean", "len": "rollout/ep_len_mean"}
+    cols = {"t": "time/total_timesteps", "rew": "rollout/ep_rew_mean",
+            "len": "rollout/ep_len_mean", "overtakes": "rollout/ep_overtakes_mean",
+            "lane_changes": "rollout/ep_lane_changes_mean",
+            "crash": "rollout/ep_crash_rate",
+            "viol_RI2": "rollout/viol_RI2_rate",
+            "viol_RG4": "rollout/viol_RG4_rate",
+            "viol_RG2": "rollout/viol_RG2_rate"}
     out = pd.DataFrame()
     for k, c in cols.items():
         out[k] = df[c] if c in df.columns else np.nan
     return out.dropna(subset=["t"])
 
 
-def plot_training_curves(cfg, tags=("ppo", "dqn"), save=True):
-    """Plot mean episode reward + length vs timesteps for each ``tag``.
-
-    Returns the matplotlib figure; saves ``metrics/training_curves.png`` to Drive.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    for tag in tags:
-        df = load_curve(cfg, tag)
-        if df is None or df.empty:
-            continue
-        axes[0].plot(df["t"], df["rew"], marker=".", label=tag.upper())
-        axes[1].plot(df["t"], df["len"], marker=".", label=tag.upper())
-    axes[0].set(title="Training: mean episode reward", xlabel="timesteps", ylabel="ep_rew_mean")
-    axes[1].set(title="Training: mean episode length", xlabel="timesteps", ylabel="ep_len_mean")
-    for ax in axes:
+def plot_training_curves(cfg, tags=("ppo", "dqn", "qrdqn"), save=True):
+    """Plot reward, length, overtakes, lane changes, crash rate — one figure each."""
+    panels = [("rew", "Mean Episode Reward"), ("len", "Mean Episode Length"),
+              ("overtakes", "Overtakes per Episode"),
+              ("lane_changes", "Lane Changes per Episode"), ("crash", "Crash Rate")]
+    curves = {tag: load_curve(cfg, tag) for tag in tags}
+    figs = []
+    for col, title in panels:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        for tag in tags:
+            df = curves[tag]
+            if df is None or df.empty:
+                continue
+            d = df[["t", col]].dropna().sort_values("t")
+            ax.plot(d["t"], d[col], marker=".", markersize=3, label=tag.upper())
+        ax.set(title=f"Training: {title}", xlabel="timesteps", ylabel=col)
+        if col == "crash":
+            ax.set_ylim(0.0, 1.05)
         ax.grid(alpha=0.3)
         ax.legend()
-    fig.tight_layout()
-    if save:
-        fig.savefig(drive_path(cfg, "metrics", "training_curves.png"), dpi=120, bbox_inches="tight")
-    return fig
+        fig.tight_layout()
+        if save:
+            fig.savefig(drive_path(cfg, "metrics", f"training_{col}.png"),
+                        dpi=120, bbox_inches="tight")
+        figs.append(fig)
+    return figs
 
 
-# =============================================================================
-# Parts 1-4 — evaluation comparison (bars with std)
-# =============================================================================
 def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
-    """Grouped bars comparing models on the headline eval metrics.
-
-    Args:
-        metrics_by_name: ``{label: evaluate(...) dict}``.
-        cfg, save_as: if both given, save the PNG to ``metrics/<save_as>``.
-    """
+    """Side-by-side bar chart comparing evaluation metrics across models."""
     names = list(metrics_by_name)
     panels = [
         ("crash_rate", lambda s: s["crash_rate"], None),
-        ("return (mean)", lambda s: s["return"]["mean"], lambda s: s["return"]["std"]),
+        ("distance (m)", lambda s: s["distance"]["mean"], lambda s: s["distance"]["std"]),
         ("overtakes (mean)", lambda s: s["overtakes"]["mean"], lambda s: s["overtakes"]["std"]),
+        ("lane changes (mean)", lambda s: s["lane_changes"]["mean"], lambda s: s["lane_changes"]["std"]),
+        ("return (mean)", lambda s: s["return"]["mean"], lambda s: s["return"]["std"]),
         ("on_road %", lambda s: s["on_road_pct"]["mean"], lambda s: s["on_road_pct"]["std"]),
     ]
     fig, axes = plt.subplots(1, len(panels), figsize=(4 * len(panels), 4))
@@ -91,17 +81,36 @@ def plot_eval_comparison(metrics_by_name, cfg=None, save_as=None):
     return fig
 
 
-# =============================================================================
-# Part 2 (XAI) — per-rule violation rates: shield vs no-shield, etc.
-# =============================================================================
+def plot_finetune_violations(cfg, tag="part2_nesy", save=True):
+    """Plot per-rule violation rates during fine-tuning (RI2, RG4, RG2)."""
+    df = load_curve(cfg, tag)
+    if df is None or df.empty:
+        return None
+    rules = [("viol_RI2", "RI2: Passing on Right"),
+             ("viol_RG4", "RG4: Impeding Flow"),
+             ("viol_RG2", "RG2: Abrupt Braking")]
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for col, label in rules:
+        d = df[["t", col]].dropna().sort_values("t")
+        if not d.empty:
+            ax.plot(d["t"], d[col], marker=".", markersize=3, label=label)
+    ax.set(title="Fine-tune: Soft-Rule Violation Rates (lower is better)",
+           xlabel="timesteps", ylabel="violation rate")
+    ax.set_ylim(-0.02, 1.05)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    if save:
+        fig.savefig(drive_path(cfg, "metrics", "finetune_violations.png"),
+                    dpi=120, bbox_inches="tight")
+    return fig
+
+
 RULES = ("RG1", "RG2", "RG3", "RG4", "RI1", "RI2")
 
 
 def plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png"):
-    """Grouped bars: per-rule violation rate for each config (the XAI headline).
-
-    Lower is better. Use to show shield / logic-reward cut violations vs baseline.
-    """
+    """Grouped bar chart of per-rule violation rates across configs."""
     names = list(metrics_by_name)
     fig, ax = plt.subplots(figsize=(10, 4.5))
     x = np.arange(len(RULES))
@@ -110,7 +119,7 @@ def plot_violation_rates(metrics_by_name, cfg=None, save_as="violation_rates.png
         rv = metrics_by_name[n]["summary"].get("rule_violation_rate", {})
         vals = [rv.get(r, 0.0) for r in RULES]
         ax.bar(x + i * width, vals, width, label=n)
-    ax.set(title="Per-rule violation rate (independent monitor) — lower is better",
+    ax.set(title="Per-rule violation rate — lower is better",
            xlabel="rule", ylabel="fraction of steps violating")
     ax.set_xticks(x + width * (len(names) - 1) / 2)
     ax.set_xticklabels(RULES)

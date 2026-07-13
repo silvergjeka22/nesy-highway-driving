@@ -7,7 +7,7 @@ real robot is driven through. This is the bridge that lets all of Part 2's
 symbolic logic survive the move to MetaDrive / a robot in Part 3.
 
 Function-only. The ROS publishing side and the camera-follow perception are
-stubbed (no ROS in Colab); the manoeuvre→velocity translation is fully usable.
+banned so can not use ros in colab.
 """
 
 
@@ -68,7 +68,7 @@ def publish_cmd_vel(twist, topic="cmd_vel"):
 def camera_follow_controller(image, cfg):
     """Minimal 'follow a target' controller to sanity-check the perception loop.
 
-    TODO: implement the Lab 1 camera-follow (detect target in ``image`` → produce
+    TODO: implement the Lab 1 camera-follow (detect target in ``image`` -> produce
     ``(v, ω)`` to keep it centred). Stubbed — the Lab 1 vision API was unavailable.
     """
     raise NotImplementedError("TODO: Lab 1 camera-follow controller (handout API unknown).")

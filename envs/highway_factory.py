@@ -1,54 +1,16 @@
-"""highway-env construction + scene adapter + reward wrappers (Parts 1-2).
-
-Public functions:
-  * ``create_environment(cfg, render, seed, logic_reward)`` — build the wrapped env.
-  * ``read_scene(env)`` — SI-unit scene dict used by the NeSy predicates (Part 2).
-
-``make_env`` is kept as an alias of ``create_environment`` for Parts 2-4.
-
-Wrappers (in order):
-  * ``OvertakeCounter``      — instrumentation: info['overtakes'], info['is_offroad'].
-  * ``RewardShapingWrapper`` — Part-1 light shaping (overtake bonus, off-road pen).
-  * ``LogicRewardWrapper``   — Part-2 Step C: subtract ``logic_penalty(preds)``.
-
-No top-level execution — the notebooks call the functions.
-"""
-
 import os
 import sys
 
-import numpy as np
-import gymnasium as gym
-
-# pygame (pulled in by highway_env) optimistically imports the deprecated
-# ``pkg_resources`` at import time, which emits noisy setuptools DeprecationWarnings
-# (incl. declare_namespace) on newer setuptools/Colab. pygame falls back to a built-in
-# stub when that import fails, and only uses it for bundled fonts/icons that rgb_array
-# rendering never needs — so block the import at the source before highway_env loads.
+# Block pkg_resources before gymnasium imports highway_env -> pygame,
 sys.modules.setdefault("pkg_resources", None)
 
-# highway_env must be imported so its envs register with gymnasium.
-import highway_env  # noqa: F401
+import numpy as np
+import gymnasium as gym
+import highway_env 
 
-def _ensure_render_backend():
-    """Set up a render backend for rgb_array frames — used inside the video subprocess.
 
-    Videos are rendered in a subprocess (never in the notebook kernel), so this only
-    configures that child process:
-
-      * Always disable audio (``SDL_AUDIODRIVER=dummy``): highway-env calls
-        ``pygame.init()``, which opens the audio device, and on a headless machine
-        (no sound card) that segfaults the process with ALSA errors. Rendering never
-        needs audio.
-      * Linux (Colab/Kaggle) has no screen — start a headless virtual display (xvfb
-        via pyvirtualdisplay) and keep it alive. We must NOT use ``SDL_VIDEODRIVER=
-        dummy`` for video: highway-env disables all drawing when it sees the dummy
-        video driver, which would produce blank frames.
-      * macOS/Windows — use the native backend, which yields real frames. That is
-        safe here because the crash it can cause only happens in the Jupyter kernel.
-
-    An already-configured display or driver is respected.
-    """
+def ensure_render_backend():
+    """Set up an offscreen display (xvfb on Linux) for headless rendering."""
     import sys
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     if os.environ.get("DISPLAY") or os.environ.get("SDL_VIDEODRIVER"):
@@ -56,38 +18,29 @@ def _ensure_render_backend():
     if sys.platform == "linux":
         try:
             from pyvirtualdisplay import Display
-
-            display = Display(visible=0, size=(1400, 900))
+            display = Display(visible=0, size=(1400, 900), color_depth=24)
             display.start()
-            _ensure_render_backend._display = display   # keep the xvfb process alive
+            ensure_render_backend._display = display
         except Exception:
             os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
 def create_environment(cfg, render=False, seed=None, logic_reward=False):
-    """Build a configured, wrapped highway-env instance.
-
-    Args:
-        cfg: full project config dict.
-        render: if True, create with ``render_mode='rgb_array'`` (for video).
-        seed: optional seed applied on the first reset.
-        logic_reward: if True, add the Part-2 ``LogicRewardWrapper``. Off for Part 1.
-
-    Returns:
-        A Gymnasium env (constant-shape Kinematics obs, DiscreteMetaAction).
-    """
+    """Build the highway-v0 env with overtake counting and reward shaping wrappers."""
     env_cfg = cfg["env"]
+    render_config = dict(env_cfg["config"])
 
     if render:
-        _ensure_render_backend()
+        ensure_render_backend()
+        render_config["offscreen_rendering"] = True
 
     env = gym.make(
         env_cfg["id"],
         render_mode="rgb_array" if render else None,
-        config=env_cfg["config"],
+        config=render_config,
     )
 
-    env = OvertakeCounter(env)
+    env = OvertakeCounter(env, blocked_gap=cfg["fsm"]["follow_gap"])
 
     shaping = cfg.get("shaping", {})
     if shaping.get("enabled", False):
@@ -95,6 +48,10 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
             env,
             overtake_bonus=shaping.get("overtake_bonus", 0.0),
             offroad_penalty=shaping.get("offroad_penalty", 0.0),
+            collision_penalty=shaping.get("collision_penalty", 0.0),
+            lane_change_bonus=shaping.get("lane_change_bonus", 0.0),
+            survival_bonus=shaping.get("survival_bonus", 0.0),
+            blocked_penalty=shaping.get("blocked_penalty", 0.0),
         )
 
     if logic_reward:
@@ -105,16 +62,11 @@ def create_environment(cfg, render=False, seed=None, logic_reward=False):
     return env
 
 
-# Back-compat alias for Parts 2-4 (which import ``make_env``).
 make_env = create_environment
 
 
 def read_scene(env):
-    """Extract an SI-unit scene dict from a (wrapped) highway-env.
-
-    Schema matches ``nesy.roadmap`` (ego + others in metres / m/s, lane as int).
-    Reaches through wrappers via ``env.unwrapped``.
-    """
+    """Extract ego + other vehicles as an SI-unit scene dict for the predicates."""
     u = env.unwrapped
     ego = u.vehicle
     lanes = u.config.get("lanes_count", 4)
@@ -125,8 +77,7 @@ def read_scene(env):
         return {
             "x": float(v.position[0]),
             "y": float(v.position[1]),
-            "vx": vx,
-            "vy": vy,
+            "vx": vx, "vy": vy,
             "v": float(getattr(v, "speed", (vx ** 2 + vy ** 2) ** 0.5)),
             "lane": int(lane),
         }
@@ -143,95 +94,141 @@ def read_scene(env):
 
 
 class OvertakeCounter(gym.Wrapper):
-    """Count distinct cars the ego passes, and flag off-road, via ``info``.
+    """Track overtakes (ego passing a vehicle that was ahead) and lane changes per episode."""
 
-    Pure instrumentation — never alters reward or actions. A neighbour that was
-    ahead of the ego and is now behind it counts once (tracked by identity).
-    """
-
-    def __init__(self, env):
+    def __init__(self, env, blocked_gap=25.0):
         super().__init__(env)
-        self._ahead_ids = set()
-        self._overtakes = 0
+        self.blocked_gap = float(blocked_gap)
+        self.ahead_ids = set()
+        self.overtakes = 0
+        self.lane_changes_count = 0
+        self.lane = None
+        self.blocked = False
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
-        self._overtakes = 0
-        self._ahead_ids = self._currently_ahead()
+        self.overtakes = 0
+        self.lane_changes_count = 0
+        self.ahead_ids = self.currently_ahead()
+        self.lane = self.current_lane()
+        self.blocked = self.is_blocked()
         info = dict(info)
         info["overtakes"] = 0
-        info["is_offroad"] = self._is_offroad()
+        info["lane_changed"] = False
+        info["lane_changes"] = 0
+        info["escape_lane_change"] = False
+        info["is_offroad"] = self.is_offroad()
         return obs, info
 
     def step(self, action):
+        was_blocked = self.blocked
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._update_overtakes()
+        self.update_overtakes()
+        lane = self.current_lane()
         info = dict(info)
-        info["overtakes"] = self._overtakes
-        info["is_offroad"] = self._is_offroad()
+        info["overtakes"] = self.overtakes
+        info["lane_changed"] = bool(lane is not None and self.lane is not None
+                                    and lane != self.lane)
+        self.lane_changes_count += int(info["lane_changed"])
+        info["lane_changes"] = self.lane_changes_count
+        info["escape_lane_change"] = bool(was_blocked and lane != self.lane)
+        self.lane = lane
+        self.blocked = self.is_blocked()
+        info["blocked"] = self.blocked
+        info["is_offroad"] = self.is_offroad()
         return obs, reward, terminated, truncated, info
 
-    def _ego(self):
+    def current_lane(self):
+        ego = self.get_ego()
+        idx = getattr(ego, "lane_index", None) if ego is not None else None
+        return idx[2] if idx else None
+
+    def is_blocked(self):
+        """True if a slower vehicle is within blocked_gap ahead in the same lane."""
+        ego = self.get_ego()
+        if ego is None:
+            return False
+        lane = self.current_lane()
+        for v in self.get_others():
+            vidx = getattr(v, "lane_index", None)
+            if vidx and vidx[2] == lane and 0 < (v.position[0] - ego.position[0]) < self.blocked_gap:
+                return True
+        return False
+
+    def get_ego(self):
         return self.env.unwrapped.vehicle
 
-    def _others(self):
-        ego = self._ego()
+    def get_others(self):
+        ego = self.get_ego()
         return [v for v in self.env.unwrapped.road.vehicles if v is not ego]
 
-    def _currently_ahead(self):
-        ego = self._ego()
+    def currently_ahead(self):
+        """Set of vehicle ids currently ahead of ego (by x position)."""
+        ego = self.get_ego()
         if ego is None:
             return set()
-        return {id(v) for v in self._others() if v.position[0] > ego.position[0]}
+        return {id(v) for v in self.get_others() if v.position[0] > ego.position[0]}
 
-    def _update_overtakes(self):
-        ego = self._ego()
+    def update_overtakes(self):
+        """Count vehicles that were ahead but are now behind (ego passed them)."""
+        ego = self.get_ego()
         if ego is None:
             return
         ex = ego.position[0]
         still_ahead = set()
-        for v in self._others():
+        for v in self.get_others():
             vx = v.position[0]
             vid = id(v)
-            if vid in self._ahead_ids:
+            if vid in self.ahead_ids:
                 if vx < ex:
-                    self._overtakes += 1
+                    self.overtakes += 1
                 else:
                     still_ahead.add(vid)
             elif vx > ex:
                 still_ahead.add(vid)
-        self._ahead_ids = still_ahead
+        self.ahead_ids = still_ahead
 
-    def _is_offroad(self):
-        ego = self._ego()
+    def is_offroad(self):
+        ego = self.get_ego()
         if ego is None:
             return False
         return not bool(getattr(ego, "on_road", True))
 
 
 class RewardShapingWrapper(gym.Wrapper):
-    """Add a small, config-driven shaping term to the native reward (Part 1)."""
+    """Add overtake bonus, crash penalty, and other shaping terms to the native reward."""
 
-    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0):
+    def __init__(self, env, overtake_bonus=0.0, offroad_penalty=0.0, collision_penalty=0.0,
+                 lane_change_bonus=0.0, survival_bonus=0.0, blocked_penalty=0.0):
         super().__init__(env)
         self.overtake_bonus = float(overtake_bonus)
         self.offroad_penalty = float(offroad_penalty)
-        self._prev_overtakes = 0
+        self.collision_penalty = float(collision_penalty)
+        self.lane_change_bonus = float(lane_change_bonus)
+        self.survival_bonus = float(survival_bonus)
+        self.blocked_penalty = float(blocked_penalty)
+        self.prev_overtakes = 0
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
-        self._prev_overtakes = int(info.get("overtakes", 0))
+        self.prev_overtakes = int(info.get("overtakes", 0))
         return obs, info
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        overtakes = int(info.get("overtakes", self._prev_overtakes))
-        passed = max(0, overtakes - self._prev_overtakes)
-        self._prev_overtakes = overtakes
+        overtakes = int(info.get("overtakes", self.prev_overtakes))
+        passed = max(0, overtakes - self.prev_overtakes)
+        self.prev_overtakes = overtakes
 
-        shaped = reward + self.overtake_bonus * passed
+        shaped = reward + self.overtake_bonus * passed + self.survival_bonus
+        if info.get("escape_lane_change", False):
+            shaped += self.lane_change_bonus
+        if info.get("blocked", False):
+            shaped -= self.blocked_penalty
         if info.get("is_offroad", False):
             shaped -= self.offroad_penalty
+        if info.get("crashed", False):
+            shaped -= self.collision_penalty
 
         info = dict(info)
         info["native_reward"] = float(reward)
@@ -240,12 +237,8 @@ class RewardShapingWrapper(gym.Wrapper):
 
 
 class LogicRewardWrapper(gym.Wrapper):
-    """Part-2 Step C: subtract the logic penalty ``Σ λ_i · violation_i``.
-
-    Computes the NeSy predicates from the SI scene each step and subtracts the
-    weighted soft-rule penalty (``nesy.roadmap.logic_penalty``). This is the
-    single reward-augmentation surface; the hard rules stay in the shield.
-    """
+    """Subtract a logic penalty (sum of weighted rule violations) from the reward.
+    Used during the Part-2 fine-tune to teach the policy to respect soft rules."""
 
     def __init__(self, env, cfg):
         super().__init__(env)
@@ -261,4 +254,7 @@ class LogicRewardWrapper(gym.Wrapper):
 
         info = dict(info)
         info["logic_penalty"] = float(pen)
+        info["viol_RI2"] = float(bool(preds.get("passing_on_right")))
+        info["viol_RG4"] = float(bool(preds.get("impedes_flow")))
+        info["viol_RG2"] = float(bool(preds.get("abrupt_braking")))
         return obs, float(reward - pen), terminated, truncated, info

@@ -1,60 +1,40 @@
-"""MetaDrive construction with a velocity (v, ω) action (Part 3).
-
-Public entry points:
-  * ``make_env_md(cfg, render, seed)`` — MetaDrive env exposing a continuous
-    ``(v, ω)`` action that maps onto ROS ``cmd_vel`` (Lab 1).
-  * ``read_scene_md(env)`` — the SAME scene schema as the highway adapter, so the
-    NeSy predicates / shield / CBF are reused unchanged.
-
-MetaDrive is heavy and is installed only in the Part-3 notebook, so it is
-imported lazily. MetaDrive API details that were not available at writing time
-(exact velocity-control hook, neighbour enumeration) are marked TODO and wrapped
-in best-effort code that fails loudly rather than silently guessing.
-
-No top-level execution.
-"""
-
-from utils import silence_warnings
-
-silence_warnings()
-
-import numpy as np  # noqa: E402
-import gymnasium as gym  # noqa: E402
+import numpy as np
+import gymnasium as gym
 
 
-def make_env_md(cfg, render=False, seed=None):
-    """Build a MetaDrive env with a continuous ``(v, ω)`` action.
-
-    Args:
-        cfg: full config; uses the ``metadrive:`` block.
-        render: enable offscreen RGB rendering (for the ``demo`` script).
-        seed: start seed (MetaDrive uses integer scenario seeds).
-
-    Returns:
-        A Gymnasium-API env whose action is ``(v_norm, ω_norm) ∈ [-1, 1]²``.
-    """
+def make_env_md(cfg, render=False, seed=None, video_3d=False):
+    """Build a MetaDrive env with a normalised (v, ω) action space."""
     md = cfg["metadrive"]
     try:
         from metadrive.envs import MetaDriveEnv
-    except ImportError as e:  # pragma: no cover
+    except ImportError as e:  # pragma: no cover - MetaDrive is Part-3 only
         raise ImportError(
-            "MetaDrive is not installed. In colab_3 run: "
-            "`pip install metadrive-simulator`."
+            "MetaDrive is not installed. In colab_3, install it under the "
+            "Python-3.10 (condacolab) runtime: `pip install metadrive-simulator`."
         ) from e
+
+    veh_cfg = {"lidar": {"num_lasers": md.get("lidar_num_lasers", 72)}}
 
     md_config = {
         "use_render": False,
-        "image_observation": False,
+        "image_observation": video_3d,
         "traffic_density": md["traffic_density"],
         "num_scenarios": md["num_scenarios"],
+        "start_seed": int(seed) if seed is not None else cfg["seed"],
         "horizon": md["horizon"],
         "map": md["map"],
-        # TODO: confirm the exact MetaDrive keys for lidar lasers / offscreen RGB
-        # against the installed version; these are the common ones.
-        "vehicle_config": {"lidar": {"num_lasers": md.get("lidar_num_lasers", 72)}},
+        "vehicle_config": veh_cfg,
     }
-    if render:
-        md_config["image_observation"] = True
+
+    if video_3d:
+        from metadrive.component.sensors.rgb_camera import RGBCamera
+        size = tuple(md.get("video_size", [800, 800]))
+        veh_cfg["image_source"] = "rgb_camera"
+        md_config.update({
+            "sensors": {"rgb_camera": (RGBCamera, size[0], size[1])},
+            "norm_pixel": False,
+            "stack_size": 1,
+        })
 
     env = MetaDriveEnv(md_config)
     env = VelocityActionWrapper(env, cfg)
@@ -64,89 +44,283 @@ def make_env_md(cfg, render=False, seed=None):
 
 
 class VelocityActionWrapper(gym.Wrapper):
-    """Expose a normalised ``(v, ω)`` action and convert it to MetaDrive control.
-
-    The policy (and the manoeuvre→cmd_vel translation in Lab 1) acts in velocity
-    space; this wrapper turns ``(v_norm, ω_norm) ∈ [-1,1]²`` into MetaDrive's
-    native ``(steering, throttle)`` command.
-    """
+    """Convert normalised (v, ω) to MetaDrive's (steering, throttle) via a P-controller."""
 
     def __init__(self, env, cfg):
         super().__init__(env)
-        self.cfg = cfg
         self.v_max = cfg["metadrive"]["v_max"]
         self.omega_max = cfg["metadrive"]["omega_max"]
+        self.max_steer = float(cfg["metadrive"].get("max_steer", 1.0))
+        self.throttle_kp = float(cfg["metadrive"].get("throttle_kp", 5.0))
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+
+    def reset(self, *, seed=None, options=None):
+        # Wrap arbitrary gym-style seeds into MetaDrive's [start_seed, start_seed+num_scenarios) window.
+        if seed is not None:
+            try:
+                start = int(self.env.config["start_seed"])
+                n = max(1, int(self.env.config["num_scenarios"]))
+            except Exception:
+                start, n = 0, 1
+            seed = int(seed)
+            if not (start <= seed < start + n):
+                seed = start + (seed % n)
+        return self.env.reset(seed=seed)
 
     def step(self, action):
         v_cmd = float(np.clip(action[0], -1.0, 1.0)) * self.v_max
         omega_cmd = float(np.clip(action[1], -1.0, 1.0)) * self.omega_max
-        native = self._velocity_to_native(v_cmd, omega_cmd)
-        return self.env.step(native)
+        return self.env.step(self._velocity_to_native(v_cmd, omega_cmd))
 
     def _velocity_to_native(self, v, omega):
-        """Map ``(v, ω)`` to MetaDrive's ``(steering, throttle)`` in [-1, 1].
-
-        Best-effort proportional mapping: steering ∝ ω, throttle ∝ (v_target − v)
-        relative to the current speed. TODO: replace with MetaDrive's documented
-        velocity-control hook (or a tuned low-level PID) once the installed API
-        is confirmed — the exact interface was unavailable at writing time.
-        """
+        """Map (v, ω) to MetaDrive's (steering, throttle) via proportional control."""
         try:
-            ego = self.env.unwrapped.agent
-            v_cur = float(np.linalg.norm(ego.velocity))
+            v_cur = float(np.linalg.norm(self.env.unwrapped.agent.velocity))
         except Exception:
             v_cur = 0.0
         steering = float(np.clip(omega / max(self.omega_max, 1e-6), -1.0, 1.0))
-        throttle = float(np.clip((v - v_cur) / max(self.v_max, 1e-6), -1.0, 1.0))
+        steering *= self.max_steer
+        throttle = float(np.clip(self.throttle_kp * (v - v_cur) / max(self.v_max, 1e-6), -1.0, 1.0))
         return np.array([steering, throttle], dtype=np.float32)
 
 
-def read_scene_md(env):
-    """Extract the common SI scene dict from a MetaDrive env.
+def kin_obs_from_scene(scene, cfg):
+    """Reconstruct highway-env's Kinematics observation from an SI scene dict.
 
-    Returns the same schema as ``envs.highway_factory.read_scene`` so the NeSy
-    predicates/shield/CBF apply unchanged.
-
-    TODO: confirm the neighbour-enumeration API for the installed MetaDrive
-    version. This best-effort version reads the ego from ``env.unwrapped.agent``
-    and neighbours from the engine's traffic manager; adjust attribute names to
-    match the handout/installed API if they differ.
+    Lets the Part-2 discrete policy run on MetaDrive by mirroring the highway-env
+    observation format. obs_speed_scale corrects the MetaDrive->highway speed gap.
     """
+    oc = cfg["env"]["config"]["observation"]
+    feats = oc.get("features", ["presence", "x", "y", "vx", "vy"])
+    n = oc.get("vehicles_count", 5)
+    max_v = 40.0
+    lanes = cfg["env"]["config"].get("lanes_count", 4)
+    vscale = float(cfg.get("metadrive", {}).get("obs_speed_scale", 1.0))
+    rng = {"x": (-5 * max_v, 5 * max_v), "y": (-4.0 * lanes, 4.0 * lanes),
+           "vx": (-2 * max_v, 2 * max_v), "vy": (-2 * max_v, 2 * max_v)}
+
+    def nz(v, key):
+        lo, hi = rng[key]
+        return float(np.clip((v - lo) / (hi - lo) * 2.0 - 1.0, -1.0, 1.0))
+
+    ego = scene["ego"]
+    x_offset = float(cfg.get("metadrive", {}).get("obs_x_offset", 0.0))
+
+    def make_row(vd, relative, x_off=0.0):
+        bx, by, bvx, bvy = (ego["x"], ego["y"], ego["vx"], ego["vy"]) if relative else (0.0, 0.0, 0.0, 0.0)
+        full = {"presence": 1.0,
+                "x": nz((vd["x"] + x_off - bx), "x"), "y": nz((vd["y"] - by), "y"),
+                "vx": nz((vd["vx"] - bvx) * vscale, "vx"), "vy": nz((vd["vy"] - bvy) * vscale, "vy")}
+        return [full[f] for f in feats]
+
+    rows = [make_row(ego, relative=False, x_off=x_offset)]
+    nearest = sorted(scene.get("others", []),
+                     key=lambda o: (o["x"] - ego["x"]) ** 2 + (o["y"] - ego["y"]) ** 2)[:n - 1]
+    rows += [make_row(o, relative=True) for o in nearest]
+    while len(rows) < n:
+        rows.append([0.0] * len(feats))
+    return np.asarray(rows, dtype=np.float32)
+
+
+def read_kin_obs_md(env, cfg):
+    """Highway-env Kinematics observation reconstructed from a live MetaDrive env."""
+    return kin_obs_from_scene(read_scene_md(env), cfg)
+
+
+def scene_to_lidar(scene, n_lasers=72, max_range=50.0):
+    """Convert scene vehicle positions into pseudo-lidar ranges for Lab 2 integration."""
+    ego = scene["ego"]
+    ranges = np.full(n_lasers, max_range)
+    for o in scene.get("others", []):
+        dx = o["x"] - ego["x"]
+        dy = o["y"] - ego["y"]
+        dist = (dx ** 2 + dy ** 2) ** 0.5
+        angle = np.arctan2(dy, dx)
+        idx = int((angle + np.pi) / (2 * np.pi) * n_lasers) % n_lasers
+        ranges[idx] = min(ranges[idx], dist)
+    return ranges
+
+
+def _road_clear_ahead(scene, dist=25.0):
+    """True if no vehicle sits within `dist` m ahead of the ego (any lane nearby)."""
+    e = scene["ego"]
+    return not any(0.0 < o["x"] - e["x"] < dist and abs(o["y"] - e["y"]) < 2.0
+                   for o in scene.get("others", []))
+
+
+def _lane_blocked(scene, ego, y_centre):
+    """True if a car occupies the slot beside the ego in that lane, or a faster
+    car behind would reach it (rear window widens with closing speed).
+
+    The 18 m look-ahead exceeds the CBF's natural following distance (~16 m),
+    so the ego cannot merge right back behind a car it is currently passing."""
+    for o in scene.get("others", []):
+        if abs(o["y"] - y_centre) >= 1.8:
+            continue
+        dx = o["x"] - ego["x"]
+        closing = max(0.0, o.get("vx", 0.0) - ego.get("vx", 0.0))
+        if -6.0 - 2.0 * closing < dx < 18.0:
+            return True
+    return False
+
+
+def _steer_to_lane(ego, y_target, omega_max):
+    """Closed-loop lateral controller: steer toward a lane-centre y.
+
+    Commands a bounded lateral speed, so the crossing rate (and overshoot)
+    stays the same at any forward speed.
+    """
+    y_err = y_target - ego["y"]
+    v = max(ego.get("v", 1.0), 1.0)
+    vy_des = float(np.clip(0.8 * y_err, -2.5, 2.5))
+    heading_des = float(np.clip(vy_des / v, -0.35, 0.35))
+    heading = ego.get("heading", 0.0)
+    return float(np.clip(2.5 * (heading_des - heading), -omega_max, omega_max))
+
+
+def nesy_md_action(part2_model, env, cfg, fsm_state, shield=True, bridge=None):
+    """Run the Part-2 discrete model on MetaDrive via the Lab-1 bridge.
+
+    The model picks the manoeuvre; the bridge executes it like highway-env's
+    low-level controller: it always tracks a target lane centre (lane keeping),
+    and a lane change latches the adjacent lane index until reached.
+
+    Args:
+        bridge: mutable dict holding the lane-change latch. Pass ``{}`` on the
+                first call and reuse across steps.
+
+    Returns (action, fsm_state).
+    """
+    from nesy.roadmap import predicates, safety_shield, continuous_shield, ACTIONS, ACTION_INDEX
+    from labs.lab1_cmd_vel import manoeuvre_to_cmd_vel
+
+    scene = read_scene_md(env)
+    md = cfg["metadrive"]
+    ego = scene["ego"]
+    centres = ego.get("lane_centres") or []
+    lane = min(ego.get("lane", 0), max(len(centres) - 1, 0))
+    v_cruise = 0.6 * md["v_max"]
+    target = bridge.get("target_lane") if bridge is not None else None
+    if target is not None and centres:
+        if abs(centres[target] - ego["y"]) < 0.3:
+            bridge.pop("target_lane", None)  # lane change complete
+            target = None
+        elif _lane_blocked(scene, ego, centres[target]):
+            bridge.pop("target_lane", None)  # target slot occupied: abort, fall back
+            target = None
+
+    if target is not None:
+        manoeuvre = "IDLE"  # hold speed while the lane change completes
+    elif ego["v"] < v_cruise and _road_clear_ahead(scene):
+        manoeuvre = "FASTER"  # warmup: reach the speed range the model was trained at
+    else:
+        a, _ = part2_model.predict(read_kin_obs_md(env, cfg),
+                                   deterministic=cfg["eval"].get("deterministic", True))
+        manoeuvre = ACTIONS[int(a)]
+
+    if shield:  # FSM shield vets every manoeuvre, warmup and latch included
+        idx, fsm_state = safety_shield(ACTION_INDEX[manoeuvre], predicates(scene, cfg),
+                                       fsm_state, cfg)
+        manoeuvre = ACTIONS[idx]
+        # Necessity gate: change lane only with a purpose — overtake on the LEFT
+        # when the FSM says a slow leader is near (FOLLOW/OVERTAKE_LEFT), and
+        # return RIGHT only when cruising. No wandering across empty lanes.
+        if manoeuvre == "LANE_LEFT" and fsm_state not in ("FOLLOW", "OVERTAKE_LEFT"):
+            manoeuvre = "IDLE"
+        elif manoeuvre == "LANE_RIGHT" and fsm_state != "CRUISE":
+            manoeuvre = "IDLE"
+    if manoeuvre in ("LANE_LEFT", "LANE_RIGHT"):
+        if target is not None:
+            manoeuvre = "IDLE"  # a lane change is already in progress: finish it first
+        else:
+            cand = lane + (-1 if manoeuvre == "LANE_LEFT" else 1)  # left = lower index (+y)
+            if (0 <= cand < len(centres) and bridge is not None
+                    and not _lane_blocked(scene, ego, centres[cand])):
+                bridge["target_lane"] = target = cand
+            else:
+                manoeuvre = "IDLE"  # no such lane / slot occupied: never steer into it
+
+    v, _ = manoeuvre_to_cmd_vel(manoeuvre, scene, cfg)
+    # Lateral control is always closed-loop on the target (or current) lane centre.
+    y_ref = centres[target if target is not None else lane] if centres else ego["y"]
+    omega = _steer_to_lane(ego, y_ref, md["omega_max"])
+    if shield:
+        lidar = scene_to_lidar(scene, md.get("lidar_num_lasers", 72))
+        (v, omega), _ = continuous_shield(v, omega, scene, cfg, lidar_ranges=lidar)
+    return np.array([v / md["v_max"], omega / md["omega_max"]], dtype=np.float32), fsm_state
+
+
+def read_scene_md(env):
+    """Extract the SI scene dict from a MetaDrive env (same schema as highway read_scene)."""
     u = env.unwrapped
-    ego = u.agent
+    ego = getattr(u, "agent", None) or u.vehicle
 
     def vinfo(obj):
         pos = np.asarray(obj.position, dtype=float)
         vel = np.asarray(obj.velocity, dtype=float)
-        heading = float(getattr(obj, "heading_theta", 0.0))
-        lane_idx = 0
         try:
-            lane_idx = int(obj.lane_index[2])
+            lane = int(obj.lane_index[2])
         except Exception:
-            lane_idx = 0
+            lane = 0
         return {
             "x": float(pos[0]),
             "y": float(pos[1]),
             "vx": float(vel[0]),
             "vy": float(vel[1]),
             "v": float(np.linalg.norm(vel)),
-            "lane": lane_idx,
-            "heading": heading,
+            "lane": lane,
+            "heading": float(getattr(obj, "heading_theta", 0.0)),
         }
 
     ego_d = vinfo(ego)
-    ego_d["on_road"] = not bool(getattr(ego, "out_of_route", False))
-
-    others = []
+    on_road = getattr(ego, "on_lane", None)
+    if on_road is None:
+        on_road = not getattr(ego, "out_of_road", False)
+    ego_d["on_road"] = bool(on_road)
+    # Real road geometry: lane-centre y of every lane at the ego's position.
+    # Lane index 0 is the leftmost (largest y); +y is left.
     try:
-        for obj in u.engine.traffic_manager.vehicles:
-            if obj is ego:
-                continue
-            others.append(vinfo(obj))
+        ref = ego.navigation.current_ref_lanes
+        pos = ego.position
+        ego_d["lane_centres"] = [float(l.position(l.local_coordinates(pos)[0], 0)[1])
+                                 for l in ref]
+        ego_d["lanes_count"] = len(ref)
     except Exception:
-        # TODO: fall back to lidar-derived predicates (labs.lab2) when the
-        # neighbour list is not exposed by this MetaDrive version.
-        others = []
+        ego_d["lane_centres"] = []
 
-    return {"ego": ego_d, "others": others, "lanes_count": 3}
+    others = [vinfo(o) for o in _neighbours(u, ego)]
+    return {"ego": ego_d, "others": others,
+            "lanes_count": int(ego_d.get("lanes_count", 3))}
+
+
+def _neighbours(u, ego):
+    """Traffic vehicles around the ego (best-effort across MetaDrive versions)."""
+    try:
+        objs = u.engine.get_objects().values()
+    except Exception:
+        return []
+    try:
+        from metadrive.component.vehicle.base_vehicle import BaseVehicle
+        return [o for o in objs if o is not ego and isinstance(o, BaseVehicle)]
+    except Exception:
+        return [o for o in objs if o is not ego and hasattr(o, "lane_index")
+                and hasattr(o, "velocity")]
+
+
+def count_passes_md(env, ahead_ids):
+    """Count vehicles that moved from ahead to behind the ego. Returns (passed, new_ahead_ids)."""
+    u = env.unwrapped
+    ego = u.agent
+    ex = float(ego.position[0])
+    passed = 0
+    still = set()
+    for o in _neighbours(u, ego):
+        oid = getattr(o, "name", None) or id(o)
+        if oid in ahead_ids:
+            if float(o.position[0]) < ex:
+                passed += 1
+            else:
+                still.add(oid)
+        elif float(o.position[0]) > ex:
+            still.add(oid)
+    return passed, still

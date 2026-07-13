@@ -1,245 +1,222 @@
 # nesy-highway-driving
 
-A **transparent, model-free autonomous-driving baseline** on `highway-env`, deliberately kept simple
-so that **Neuro-Symbolic (NeSy)** reasoning — explicit, formally-specified driving rules — can be
-layered on top and *measured* against it. The car learns to **overtake traffic while staying safe**;
-the symbolic layer then makes that safety **provable** and **explainable (XAI)** using real traffic
-law formalised in temporal logic.
+A small research project for the **Explainable AI · Neuro-Symbolic AI** course (Dr. Daniele Meli).
 
-> **This README is the single source of truth for the whole plan.** Progress and open items live in
-> [`TODO.md`](TODO.md). There are no other planning docs — everything (architecture, rule catalog,
-> NeSy roadmap, XAI framing) is consolidated here.
+**The idea in one sentence:** a neural network learns to drive and overtake on a highway, and then
+real traffic rules — taken from published papers and written as logic — are added on top to make the
+car safe, and to *measure* and *explain* how safe it is.
 
----
+**Neuro-Symbolic (NeSy)** means combining a **neural network** (learns from data, fast, but a black
+box) with **symbolic rules** (written by humans, clear and checkable). This project does exactly that,
+in three steps — one Colab notebook each.
 
-## 1. The idea in one paragraph
-
-Train a car to drive and overtake safely on a highway using **standard model-free RL** — **PPO**
-(recommended) with **DQN** as a second baseline — over a **discrete tactical action space**
-(`LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER`). The low-level controller handles steering/throttle;
-the agent only picks the manoeuvre. That choice is the hinge: symbolic driving rules are naturally
-written over *manoeuvres* ("don't change left unless the left gap is safe"), so the NeSy layer can
-reason in the **same vocabulary** the policy acts in — **shielding**, **shaping**, or **explaining**
-its decisions cleanly. The headline result to aim for: *the same or better overtaking, with provably
-fewer rule violations than the pure-neural baseline.*
+> Every rule violation is counted by a separate, **independent checker** — never by the reward or the
+> shield the car is trained with. So the numbers below are honest and can be audited. All results
+> shown are the real measured results of the project.
 
 ---
 
-## 2. The XAI / Neuro-Symbolic framing (from the lecture)
+## The three parts
 
-This project is the practical companion to the **XAI · Neurosymbolic AI** lecture (Dr. Daniele Meli).
-Two ideas from the lecture drive the design:
+The notebooks run in order. Each one saves its result to Google Drive, and the next one picks it up.
 
-- **System 1 / System 2** (Kahneman). The trained neural policy is the fast, associative **System 1**
-  (a black box). The temporal-logic traffic rules are the slow, inspectable **System 2**. NeSy is how
-  we connect them.
-- **Kautz's taxonomy.** We sit in the **Neuro[Symbolic]** regime — System 1 (the policy) is in
-  control, and System 2 (logic) is invoked when needed (to veto, to penalise, to explain).
+| Notebook | Part | What it does |
+|---|---|---|
+| `notebooks/colab_1_baseline.ipynb` | **Part 1** | train three algorithms to drive, pick the best |
+| `notebooks/colab_2_nesy.ipynb` | **Part 2** | add the traffic rules three ways, compare them |
+| `notebooks/colab_3_metadrive.ipynb` | **Part 3** | move the best driver to a 3D robot simulator, keep it safe with the labs |
 
-The lecture contrasts **two canonical ways to inject logic into RL**, and *this project implements and
-compares both* (Part 2):
+---
 
-| Method | Lecture (slides) | Mechanism | Trade-off the lecture highlights |
+## The main idea
+
+Two ideas shape the whole project:
+
+- **System 1 / System 2.** The trained neural network is fast, automatic thinking (System 1) — but a
+  black box. The traffic rules are slow, careful thinking (System 2) — clear and checkable.
+  Neuro-Symbolic AI is how we connect the two.
+- **Two ways to add rules to a learner.** *Shielding* blocks an unsafe action at the last moment
+  (safe, but can cost performance). *Reward shaping* teaches the rules during training (keeps
+  performance, but gives no guarantee). The project implements **both** and compares them.
+
+---
+
+## Part 1 — teach a car to drive
+
+The simulator is **highway-env**: a 4-lane road with traffic. Our car (the "ego"):
+
+- **sees** the position and speed of itself and the 4 nearest cars (just numbers, not images);
+- **does** one of 5 moves — left, right, faster, slower, stay — twice a second;
+- **is rewarded** for speed and for passing cars, and punished for crashing.
+
+The reward is made **aggressive on purpose**, so the car learns to drive fast and take risks. This
+gives us a rule-breaking driver that Part 2 can then fix.
+
+We train three standard reinforcement-learning algorithms and compare them fairly (same road, same
+settings, same amount of training):
+
+- **DQN** — learns how good each move is *on average*.
+- **QR-DQN** — the same as DQN, but learns the *whole range* of outcomes, so it can see rare crashes.
+- **RecurrentPPO** — learns the behaviour directly, and has a small memory.
+
+**Result** (50 test runs each):
+
+| Algorithm | Crashes | Overtakes per run | |
 |---|---|---|---|
-| **Shielding** | *Action pruning*, 92–96 | hard: replace an unsafe manoeuvre at run time (zero retraining) | safety is **guaranteed**, but pruning *"requires perfect domain knowledge"* and can cost performance / make a goal unreachable |
-| **Reward shaping** | *Logical reward*, 84–91 | soft: `reward − Σ λ·violation`, the policy *learns* to comply | keeps performance, but *"reward is not enough"* — compliance is only soft/sub-optimal |
+| RecurrentPPO | 100% | 3.5 | slow to learn in this test |
+| DQN | 100% | 6.3 | fastest, but always crashes |
+| **QR-DQN** | **78%** | **5.4** | **survives longest → winner** |
 
-**One rule, three encodings** (the project's headline): a single hard rule is (a) an **MTL/temporal-
-logic formula** from the papers, (b) a **discrete manoeuvre shield** (Part 2), and (c) a **CBF /
-velocity-obstacle** constraint on `(v, ω)` (Part 3). Showing the discrete shield and the continuous
-CBF agree on the same scene is the strongest evidence the rule is encoded faithfully.
-
-**Explainability deliverable.** Every config is scored by an **independent temporal-logic monitor**
-(`nesy.roadmap.rule_violations`), *not* by the reward/shield the agent optimises — so "fewer
-violations" is an honest, auditable, *simulatable* measurement, exactly the XAI point of the lecture.
+QR-DQN wins because it is the only one that "sees" the rare crash instead of hiding it inside an
+average. 78% crashes is still a bad driver — on purpose; that is what Part 2 fixes.
 
 ---
 
-## 3. The four parts (one Colab notebook each)
+## The traffic rules
 
-Each notebook follows the **same conventions** (function-only `.py` modules imported by the notebook,
-one config YAML, clone-from-GitHub + mount Drive, fixed seeds) and **ends by saving an `.mp4` to
-Drive**. The Drive checkpoints are the hand-off between notebooks.
+The rules come from two published papers (Maierhofer et al., IEEE 2020 and 2022) that rewrite real
+German/EU traffic law as **temporal logic** — logic with a sense of time, e.g. "*always* keep a safe
+distance". Six rules are used:
 
-| Notebook | Part | What it does | Saved to Drive |
+| Rule | Plain meaning | Kind |
+|---|---|---|
+| **RG1** | keep a safe distance from the car ahead | hard |
+| **RG3** | obey the speed limit | hard |
+| **RI1** | don't stop in the middle of the road | hard |
+| **RG2** | don't brake harshly for no reason | soft |
+| **RG4** | don't block the traffic behind you | soft |
+| **RI2** | don't overtake on the right (overtaking must be on the left) | soft |
+
+**Hard vs soft.** Hard rules are safety rules humans almost never break, so we **forbid** breaking
+them (a veto — the shield). Soft rules are comfort rules humans sometimes bend, so we **penalise**
+them, and the car learns to avoid them. This split copies how the papers measured real drivers.
+
+**Safe distance (RG1)** uses the standard stopping-distance idea: my reaction distance, plus my
+braking distance, minus the distance the car ahead gains by braking. If the real gap is smaller than
+that, RG1 is broken. All rule numbers live in one config file (`configs/highway.yaml`) and are
+traceable to the papers.
+
+---
+
+## Part 2 — add the rules
+
+Part 2 takes the trained QR-DQN and makes it obey the rules, in three ways, then compares them. First
+the scene is turned into simple true/false facts (called **predicates**), e.g. "am I too close?".
+Then:
+
+- **Shield** — checks the chosen move and swaps it for a safe one if it breaks a hard rule. No
+  re-training.
+- **Reward shaping** — during a short re-training, the car loses reward when it breaks a soft rule,
+  so it learns better habits.
+- A third method, **MCTS planning**, is also included (it is used mainly in Part 3).
+
+**Result** (same independent checker, on QR-DQN):
+
+| Setup | Crashes | Overtakes per run | Rule-breaking |
 |---|---|---|---|
-| [`colab_1_baseline.ipynb`](notebooks/colab_1_baseline.ipynb) | **Part 1** | study the env, train **PPO vs DQN**, log training curves, evaluate + compare, pick the **best** | `part1_best_{tag}.zip` **+ `part1_best.mp4`** (+ `dqn_test.mp4`) + plots |
-| [`colab_2_nesy.ipynb`](notebooks/colab_2_nesy.ipynb) | **Part 2 (XAI)** | load the best model, add NeSy: **predicates → shield → logic-reward**, **compare shield vs no-shield**, pick best method | `part2_nesy.zip` **+ `part2_nesy.mp4`** + violation plots |
-| [`colab_3_metadrive.ipynb`](notebooks/colab_3_metadrive.ipynb) | **Part 3** | port to **MetaDrive** (velocity action, CBF/VO, intersections) | `part3_metadrive.zip` **+ `part3_metadrive.mp4`** |
-| [`colab_4_race.ipynb`](notebooks/colab_4_race.ipynb) | **Part 4** | **race** the NeSy agent vs the no-NeSy baseline in one scene | race scorecard **+ `part4_race.mp4`** |
+| neural only | 78% | 5.4 | high |
+| + shield | 12% | 3.6 | lower |
+| + reward | 90% | 4.3 | medium |
+| + shield + reward | 24% | 3.3 | low |
 
-> **Current focus: Parts 1 & 2** (the highway-env baseline + the NeSy/XAI layer). They are fully
-> implemented and runnable end-to-end. Parts 3 & 4 are planned and scaffolded (see
-> [`TODO.md`](TODO.md) for the exact open items).
-
-### Part 1 — baseline: compare PPO vs DQN, save the best (`colab_1_baseline.ipynb`)
-
-1. **Setup** — mount Drive, run `bash/setup_colab.sh`, load `configs/highway.yaml`.
-2. **Study & explain the environment** — `highway-v0`, the discrete meta-actions, the `Kinematics`
-   observation (ego + N nearest vehicles, ego-relative, normalised), the reward (native
-   speed/lane-keeping − collision **plus light shaping**: small overtake bonus, small off-road
-   penalty — kept light so it doesn't confound Part 2), and a random-policy clip.
-3. **Train both baselines** on the same env/seeds. Training curves (`ep_rew_mean`, `ep_len_mean` vs
-   timesteps) are logged to `metrics/curves/<algo>/progress.csv` and **plotted PPO-vs-DQN**.
-
-   | Algorithm | Type | Why |
-   |---|---|---|
-   | **PPO** | on-policy policy-gradient | **recommended**; on-policy avoids replaying stale noisy transitions; clipped objective tolerates shaping; clean credit assignment for multi-step overtakes |
-   | **DQN** | off-policy value-based | second baseline; more sample-efficient on discrete actions but more brittle in noisy traffic |
-
-4. **Evaluate + compare** on the same held-out seeds: crash rate, on-road %, overtakes/episode,
-   return, length — mean ± std, side by side, with a **comparison bar chart**. Because crashes cut
-   episodes short, evaluation also reports **overtaking diagnostics** — overtakes per 100 steps,
-   the fraction of episodes with ≥1 overtake, and the max overtakes in an episode — so a low raw
-   count isn't mistaken for "the car never overtakes". `evaluate()` also saves a **≥30s test clip**
-   (`eval.video_seconds`) of each policy driving, for PPO *and* DQN.
-5. **Pick the best** — PPO is the recommended baseline (on-policy, safety-first), so it is marked
-   `part1_best` directly; the same explicit `select:` rule (lowest crash rate within
-   `within_return_pct` of the top return) is reused to rank the NeSy configs in Part 2.
-6. **Save** the best checkpoint, the metrics, the plots, and the ≥30s test videos
-   (`part1_best.mp4` for PPO, `dqn_test.mp4` for DQN) to Drive.
-
-### Part 2 — NeSy + XAI: shield vs reward shaping (`colab_2_nesy.ipynb`)
-
-Loads the best Part-1 checkpoint and makes it obey the traffic rules, the **two ways the lecture
-contrasts**, then compares them:
-
-- **Step A — Predicates (perception → logic).** Ground the SI-unit scene into truth-valued
-  predicates: `keeps_safe_distance`, `safe_gap_left/right`, `too_close`/`off_road`,
-  `over_speed_limit`/`speed_below_min`, `unnecessary_braking`, `impedes_flow`, `passing_on_right`,
-  `in_standstill`/`must_not_stop`. Parameters from the YAML `rules:` block, traceable to the papers.
-- **Step B — Safety shield (FSM, Lab 3), zero retraining.** Wrap the frozen policy in an FSM
-  (`CRUISE/FOLLOW/OVERTAKE_LEFT/MERGE/EMERGENCY_STOP`); if a manoeuvre violates a **hard constraint**
-  (RG1 safe gap, RG3 speed limit, RI1 no-stop, stay-on-road) it's replaced with the safest legal
-  fallback. *This is the lecture's shielding.*
-- **Step C — Logic-shaped reward fine-tune.** Warm-start from the best checkpoint and continue
-  training (lower LR, fewer steps) on `reward − Σ λ_i·violation_i` over the **soft heuristics**
-  (RI2 passing-right, RG4 impeding flow, RG2 abrupt braking). *This is the lecture's reward shaping.*
-- **Compare four configs** — *baseline*, *+shield*, *+logic-reward*, *+shield+reward* — with per-rule
-  violation rates from the **independent monitor**, plotted, and an explicit **best-method pick**
-  (`eval.evaluate.select_nesy_method`: fewest total violations among configs that keep overtaking and
-  don't worsen crashes). Save the NeSy checkpoint, plots, and `part2_nesy.mp4`.
-
-### Part 3 — MetaDrive (planned: realistic sim + velocity action)
-
-Ports the validated pipeline to **MetaDrive**: a continuous **velocity `(v, ω)`** action (maps to a
-robot's ROS `cmd_vel`), a **Control Barrier Function** safety filter (Lab 5) + **velocity obstacles**
-(Lab 4) on the command, the **same `predicates()`** via a MetaDrive observation adapter, and
-**intersection rules** (2022 paper). The discrete meta-actions stay the *symbolic vocabulary* — the
-shield reasons over manoeuvres, translated to `(v, ω)`. MetaDrive-specific APIs are scaffolded with
-explicit TODOs; the **CBF ↔ discrete-shield agreement check runs without MetaDrive**.
-
-### Part 4 — race: NeSy vs no-NeSy (planned capstone)
-
-Put both agents in the **same** multi-agent scene and let them race — each overtakes background
-traffic and tries to surpass the other — scoring *who finishes first* **and** *who stays safe and
-rule-compliant under competitive pressure*. **Honest caveat:** a "be ahead" incentive rewards
-aggression, so the scorecard **always** pairs finishing progress with crash + violation metrics,
-never the winner alone.
+The shield fixes the hard rules (safe distance, speed) with no re-training; the reward fixes the soft
+habits (overtaking on the right, blocking traffic). Together they work best.
 
 ---
 
-## 4. The rule catalog (papers → predicate → constraint/heuristic)
+## The robotics labs
 
-Rules come from **Maierhofer et al., *Formalization of Interstate Traffic Rules in Temporal Logic*,
-IEEE IV 2020** (Table II; PDF in [`paper/`](paper/)); intersection rules from the **2022** companion
-paper. Parameters live in `configs/highway.yaml` under `rules:`.
+The safety layer is built from the course labs, connected together:
 
-| Rule | Meaning | Predicate(s) | Tag | Key params |
-|---|---|---|---|---|
-| **RG1** | safe distance to leader; no lane change into an unsafe gap | `keeps_safe_distance`, `safe_gap_left/right`, `too_close` | **constraint** (shield) | `t_d=0.3`, `a_min_ego=-10.0`, `a_min_other=-10.5` |
-| **RG2** | no unnecessary (abrupt) braking | `unnecessary_braking` | heuristic (reward) | `a_abrupt=-2.0` |
-| **RG3** | obey the speed limit | `over_speed_limit`, `speed_below_min` | **constraint** (upper) / heuristic (lower) | `v_max=30.0` (sim) |
-| **RG4** | preserve traffic flow behind a slow leader | `impedes_flow` | heuristic (reward) | `delta_v_fl=15.0` |
-| **RI1** | no stopping where forbidden | `in_standstill`, `must_not_stop` | **constraint** (shield) | `v_err=0.01` |
-| **RI2** | no passing on the right (outside queue/slow/congestion) | `passing_on_right` | heuristic (reward) | `v_qv`, `slightly_higher_speed` |
-| **RI3** | no U-turn / reversing | `makes_uturn` *(needs heading; stubbed)* | constraint | `delta_theta_uturn=1.57` |
-| **RI4** | keep the emergency lane clear in congestion | *(needs lane-type map; stubbed)* | constraint | — |
-
-**Safe distance (RG1):** the legal RSS-style gap is
-`d_safe = v_ego·t_d + v_ego²/(2|a_min_ego|) − v_lead²/(2|a_min_other|)`, and
-`keeps_safe_distance ⇔ (leader_x − ego_x − car_length) ≥ d_safe`.
-
-**Why the constraint/heuristic split** (and why shield *and* reward): safety rules humans almost never
-break (RG1, RG3-upper, RI1, stay-on-road) → **hard shield** (≈0 violations, no retraining); comfort/
-efficiency rules humans trade off 20–35% of the time (RG2, RG4, RI2) → **soft reward penalties** the
-policy *learns*. This mirrors the papers' own human-compliance findings.
+| Lab | What it gives | Used in |
+|---|---|---|
+| **Lab 1** | turns a move into a robot speed command (forward speed + turn rate) | Part 3 |
+| **Lab 2** | LIDAR: brake for close obstacles | Part 3 |
+| **Lab 3** | state machine that hosts the safety shield | Part 2 |
+| **Lab 4** | MCTS planner + a "is this gap safe?" test | Parts 2 & 3 |
+| **Lab 5** | the RL learner + a safety filter (Control Barrier Function) | Parts 1 & 3 |
 
 ---
 
-## 5. The labs (the robotics toolbox)
+## Part 3 — a new simulator
 
-| Lab | Topic | Role in this project | Used in |
-|---|---|---|---|
-| **Lab 1** | intro + camera follow | `cmd_vel` / velocity interface; manoeuvre→`(v,ω)` | Part 3 |
-| **Lab 2** | LIDAR obstacle avoidance | reactive safety floor; range→predicate grounding | Part 2/3 |
-| **Lab 3** | FSM planning | the finite-state-machine behaviour layer that **hosts the shield** | Part 2 |
-| **Lab 4** | MCTS + velocity obstacles | VO/RVO safe-gap grounding | Part 2/3 |
-| **Lab 5** | RL + CBF | the RL learner (Part 1) + **Control Barrier Function** filter on `(v, ω)` (Part 3) | Part 1/3 |
+Part 3 takes the trained QR-DQN (which has never seen this world) and drops it into **MetaDrive**, a
+3D simulator with realistic physics. It drives there through the labs: the model picks a move → the
+shield checks it → Lab 1 turns it into a robot speed command → the safety filters (barrier function,
+velocity obstacles, LIDAR) clean it → the car moves.
+
+This tests whether the safety comes from the **rules** or from the **network**. Three setups are
+compared:
+
+| Setup | Crashes | Overtakes per run |
+|---|---|---|
+| brain only (no rules) | 35% | 2.15 |
+| + shield | 5% | 1.40 |
+| **MCTS + shield** | **5%** | **2.15 → best** |
+
+MCTS wins here: it uses the rules *before* acting (so its moves are already legal), and it plans on
+the real scene (so a world it never trained on does not confuse it). This gives the safety of the
+shield **and** the overtaking of the bare model.
+
+**One rule, three encodings.** The same safe-distance rule appears as (1) a logic fact, (2) a blocked
+move in the shield, and (3) a math safety filter — and all three always agree. This shows the rule
+survived the move to the new world unchanged. (This check also runs on its own, without MetaDrive.)
 
 ---
 
-## 6. Repository structure & conventions
+## How to run (Google Colab)
+
+1. Open a notebook in Colab and choose **Runtime → Run all**.
+2. When asked, paste a **GitHub token** (the repo is private); the setup cell clones the code and
+   installs the libraries.
+3. Run the parts **in order**: Part 1 → Part 2 → Part 3. Each part loads the previous part's result
+   from Drive.
+4. **Part 3 only:** MetaDrive needs Python ≤ 3.11, so its first cell installs a Python-3.10 runtime
+   and restarts the kernel once. This is expected — just choose **Run all** again. The 3D video needs
+   a GPU runtime; on CPU it uses a top-down view instead.
+
+---
+
+## Project structure
 
 ```
 nesy-highway-driving/
-├── README.md                     # this file — the full plan
-├── TODO.md                       # done / remaining / notes
-├── requirements.txt
-├── utils.py                      # config, seeds, Drive paths, save_mp4, curve_dir
-├── bash/setup_colab.sh           # clone repo + pip install + NumPy 2.x + Drive folders
-├── configs/highway.yaml          # the ONE config: env + ppo + dqn + rules{} + fsm{} + metadrive{} + cbf{} + vo{} + race{}
-├── notebooks/                    # the only place code executes
-│   ├── colab_1_baseline.ipynb    # Part 1  -> part1_best.mp4
-│   ├── colab_2_nesy.ipynb        # Part 2  -> part2_nesy.mp4   (XAI)
-│   ├── colab_3_metadrive.ipynb   # Part 3  -> part3_metadrive.mp4
-│   └── colab_4_race.ipynb        # Part 4  -> part4_race.mp4
-├── envs/
-│   ├── highway_factory.py        # make_env(cfg), read_scene(env), reward wrappers   [Parts 1-2,4]
-│   └── metadrive_factory.py      # make_env_md(cfg), read_scene_md(env), (v,ω)        [Part 3]
-├── agents/baselines.py           # train_ppo/dqn, load_model, finetune_logic_reward, train_ppo_md
-├── eval/
-│   ├── evaluate.py               # evaluate(), record_video(), select_nesy_method()
-│   ├── plots.py                  # plot_training_curves(), plot_eval_comparison(), plot_violation_rates()
-│   └── race.py                   # make_race_env(), race(), record_race_video()
-├── nesy/roadmap.py               # predicates(), safety_shield(), logic_penalty(), rule_violations()
-├── labs/                         # lab1_cmd_vel, lab2_lidar_avoidance, lab3_fsm, lab4_velocity_obstacles, lab5_cbf
-└── paper/                        # the temporal-logic traffic-rule PDFs + the XAI/NeSy lecture (.pptx)
+├── README.md              # this file
+├── TODO.md                # short status: what is done
+├── requirements.txt       # Python libraries
+├── configs/highway.yaml   # one config file: all settings and rule numbers
+├── notebooks/             # the three Colab notebooks (the only place code runs)
+├── envs/                  # build the two simulators + read the scene
+├── agents/baselines.py    # train the RL algorithms, load a model
+├── nesy/roadmap.py        # the rules: predicates, shield, independent checker
+├── labs/                  # the five course labs
+├── eval/                  # evaluation + plots
+├── demo/                  # standalone scripts that record the videos
+└── paper/                 # the traffic-rule papers
 ```
 
-**Conventions**
-- **Function-only `.py` files** — no top-level execution; the four notebooks are the only orchestration.
-- **One config YAML** — every quantity lives in `configs/highway.yaml` (incl. all rule parameters);
-  nothing is hard-coded.
-- **Colab workflow** — mount Drive → `setup_colab.sh` (clone/pull + `pip install` + Drive folders) →
-  import functions → run → mirror checkpoints/metrics/videos to
-  `/content/drive/MyDrive/nesy-highway-driving/{checkpoints,metrics,videos,metrics/curves}/`.
-- **Fixed seeds**, identical eval seeds across algorithms and parts → every comparison is fair.
-
-**Evaluation metrics:** crash rate · on-road % · overtakes/episode (+ overtakes per 100 steps, %
-episodes with an overtake, max overtakes) · return · episode length · **plus** per-rule violation
-rate (independent monitor). PPO vs DQN and every NeSy config on the same seeds.
+**Conventions.** The `.py` files hold functions only — the notebooks are the only place code runs.
+Everything is set in one config file (`configs/highway.yaml`), nothing is hard-coded. The same fixed
+test runs are used for every algorithm and every setup, so all comparisons are fair.
 
 ---
 
-## 7. How to run (Colab)
+## What is simplified (kept honest)
 
-1. Open a notebook in Colab and **Runtime → Run all**.
-2. Provide a **GitHub token** (Colab `userdata` `GITHUB_TOKEN`, or the hidden prompt) — the repo is
-   private; `setup_colab.sh` clones it, installs deps, and creates the Drive folders.
-3. **NumPy note:** Colab ships NumPy 2.x. The setup keeps NumPy on 2.x; if a stale build was loaded,
-   the first setup cell **restarts the runtime once** automatically — just run all again. (Do *not*
-   pin `numpy<2`; that triggers the `numpy.dtype size changed` ABI error.)
-4. Run Part 1 → Part 2 in order (Part 2 loads Part 1's best checkpoint from Drive). Parts 3–4 are
-   optional/planned.
+To keep the project focused, a couple of things are kept simple — and are noted openly:
+
+- On MetaDrive, the "no stopping" (RI1) and "no overtaking on the right" (RI2) counts look very high.
+  This is a **units issue, not a real failure**: those rules' thresholds were set for highway speeds
+  (~30 m/s) and the robot drives much slower (~8 m/s). The rule text is the same; only the numbers
+  would need re-tuning for the slower world.
+- The safety filter (Control Barrier Function) is a simple one-dimensional version, not the full
+  optimisation.
 
 ---
 
-## 8. Papers
+## Papers
 
-- **Interstate rules** — Maierhofer et al., *IEEE IV 2020* — safe distance, braking, speed, flow, no
-  stopping, no passing-right, emergency lane. → `highway-env` (Parts 1–2, 4). PDF in [`paper/`](paper/).
-- **Intersection rules** — Maierhofer et al., *IEEE IV 2022* — stop signs, lights, right-before-left,
-  priority, left-turn yielding. → MetaDrive (Part 3). PDF in [`paper/`](paper/).
-- **XAI · Neurosymbolic AI lecture** — Dr. Daniele Meli (`paper/XAI_NeSy.pptx`) — System 1/2, Kautz's
-  taxonomy, shielding vs reward shaping, informed exploration. The conceptual basis for §2.
+- **Interstate traffic rules** — Maierhofer et al., *IEEE IV 2020* — safe distance, braking, speed,
+  flow, no stopping, no overtaking on the right. Used in Parts 1–2. (PDF in `paper/`.)
+- **Intersection traffic rules** — Maierhofer et al., *IEEE IV 2022* — used as the basis for Part 3.
+  (PDF in `paper/`.)
