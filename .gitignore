@@ -13,4 +13,6 @@ tb/
 *.zip
 *.mp4
 
+.DS_Store
+
 presentation/
