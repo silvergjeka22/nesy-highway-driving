@@ -117,7 +117,7 @@ Then:
 | neural only | 78% | 5.4 | high |
 | + shield | 12% | 3.6 | lower |
 | + reward | 90% | 4.3 | medium |
-| **+ shield + reward** | **24%** | **3.3** | **lowest → winner** |
+| + shield + reward | 24% | 3.3 | low |
 
 The shield fixes the hard rules (safe distance, speed) with no re-training; the reward fixes the soft
 habits (overtaking on the right, blocking traffic). Together they work best.
