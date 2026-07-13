@@ -5,7 +5,6 @@ runnable end-to-end; the open items are stretch goals.
 
 ---
 
-## ✅ Done
 
 ### Part 1 — baseline (highway-env)
 - [x] `create_environment` + `read_scene` + overtake-counter / reward-shaping wrappers.
