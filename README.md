@@ -1,8 +1,6 @@
 # nesy-highway-driving
 
-A small research project for the **Explainable AI · Neuro-Symbolic AI** course (Dr. Daniele Meli).
-
-**The idea in one sentence:** a neural network learns to drive and overtake on a highway, and then
+**The idea:** a neural network learns to drive and overtake on a highway, and then
 real traffic rules — taken from published papers and written as logic — are added on top to make the
 car safe, and to *measure* and *explain* how safe it is.
 
