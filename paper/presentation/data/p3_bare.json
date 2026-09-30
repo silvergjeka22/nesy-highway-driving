@@ -1,0 +1,483 @@
+{
+  "summary": {
+    "n_episodes": 20,
+    "crash_rate": 0.35,
+    "on_road_pct": {
+      "mean": 100.0,
+      "std": 0.0
+    },
+    "overtakes": {
+      "mean": 2.15,
+      "std": 1.7965244223221684
+    },
+    "lane_changes": {
+      "mean": 7.1,
+      "std": 4.742362280551751
+    },
+    "return": {
+      "mean": 602.8546174993883,
+      "std": 145.59830466323132
+    },
+    "native_return": {
+      "mean": 602.8546174993883,
+      "std": 145.59830466323132
+    },
+    "length": {
+      "mean": 685.75,
+      "std": 166.08758984343172
+    },
+    "distance": {
+      "mean": 573.1001853942871,
+      "std": 133.81455631340913
+    },
+    "overtake_rate_per_100steps": {
+      "mean": 0.2890475046461673,
+      "std": 0.23960472311740613
+    },
+    "episodes_with_overtake": 0.75,
+    "max_overtakes": 6,
+    "rule_violation_rate": {
+      "RG1": 0.014509660955158585,
+      "RG2": 0.0,
+      "RG3": 0.0,
+      "RG4": 0.1955523149835946,
+      "RI1": 1.0,
+      "RI2": 0.6562887349617208
+    },
+    "mean_speed": 8.447215797781208
+  },
+  "episodes": [
+    {
+      "seed": 42,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 0,
+      "lane_changes": 1,
+      "return": 639.861993652163,
+      "native_return": 639.861993652163,
+      "length": 737,
+      "distance": 603.4786987304688,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 157,
+        "RI1": 737,
+        "RI2": 480
+      },
+      "viol_steps": 737,
+      "mean_speed": 8.201132053397727
+    },
+    {
+      "seed": 43,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 1,
+      "lane_changes": 2,
+      "return": 666.6613558531492,
+      "native_return": 666.6613558531492,
+      "length": 772,
+      "distance": 629.2263793945312,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 216,
+        "RI1": 772,
+        "RI2": 577
+      },
+      "viol_steps": 772,
+      "mean_speed": 8.170055997618476
+    },
+    {
+      "seed": 44,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 5,
+      "lane_changes": 4,
+      "return": 771.5355937485094,
+      "native_return": 771.5355937485094,
+      "length": 772,
+      "distance": 729.574951171875,
+      "violations": {
+        "RG1": 19,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 102,
+        "RI1": 772,
+        "RI2": 584
+      },
+      "viol_steps": 772,
+      "mean_speed": 9.474982446937874
+    },
+    {
+      "seed": 45,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 6,
+      "lane_changes": 5,
+      "return": 580.7844662329402,
+      "native_return": 580.7844662329402,
+      "length": 705,
+      "distance": 561.2982788085938,
+      "violations": {
+        "RG1": 7,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 209,
+        "RI1": 705,
+        "RI2": 696
+      },
+      "viol_steps": 705,
+      "mean_speed": 7.993495258837168
+    },
+    {
+      "seed": 46,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 4,
+      "lane_changes": 8,
+      "return": 691.0012116454546,
+      "native_return": 691.0012116454546,
+      "length": 772,
+      "distance": 652.4105834960938,
+      "violations": {
+        "RG1": 6,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 160,
+        "RI1": 772,
+        "RI2": 542
+      },
+      "viol_steps": 772,
+      "mean_speed": 8.49138578317038
+    },
+    {
+      "seed": 47,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 3,
+      "lane_changes": 4,
+      "return": 716.9328922904601,
+      "native_return": 716.9328922904601,
+      "length": 849,
+      "distance": 677.2903442382812,
+      "violations": {
+        "RG1": 22,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 284,
+        "RI1": 849,
+        "RI2": 391
+      },
+      "viol_steps": 849,
+      "mean_speed": 7.999728622707924
+    },
+    {
+      "seed": 48,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 3,
+      "lane_changes": 6,
+      "return": 645.4144499617603,
+      "native_return": 645.4144499617603,
+      "length": 734,
+      "distance": 609.0072631835938,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 142,
+        "RI1": 734,
+        "RI2": 548
+      },
+      "viol_steps": 734,
+      "mean_speed": 8.332936218527436
+    },
+    {
+      "seed": 49,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 0,
+      "lane_changes": 19,
+      "return": 683.2733182167507,
+      "native_return": 683.2733182167507,
+      "length": 792,
+      "distance": 644.8927612304688,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 143,
+        "RI1": 792,
+        "RI2": 270
+      },
+      "viol_steps": 792,
+      "mean_speed": 8.215228923496555
+    },
+    {
+      "seed": 50,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 2,
+      "lane_changes": 13,
+      "return": 599.1876356672807,
+      "native_return": 599.1876356672807,
+      "length": 785,
+      "distance": 564.4071044921875,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 323,
+        "RI1": 785,
+        "RI2": 458
+      },
+      "viol_steps": 785,
+      "mean_speed": 7.24676655448744
+    },
+    {
+      "seed": 51,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 1,
+      "lane_changes": 5,
+      "return": 687.8836970963109,
+      "native_return": 687.8836970963109,
+      "length": 731,
+      "distance": 649.436767578125,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 144,
+        "RI1": 731,
+        "RI2": 575
+      },
+      "viol_steps": 731,
+      "mean_speed": 8.91385074819631
+    },
+    {
+      "seed": 52,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 1,
+      "lane_changes": 11,
+      "return": 599.3332457751002,
+      "native_return": 599.3332457751002,
+      "length": 684,
+      "distance": 578.8992919921875,
+      "violations": {
+        "RG1": 10,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 164,
+        "RI1": 684,
+        "RI2": 534
+      },
+      "viol_steps": 684,
+      "mean_speed": 8.51460731639614
+    },
+    {
+      "seed": 53,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 2,
+      "lane_changes": 4,
+      "return": 741.5080256363029,
+      "native_return": 741.5080256363029,
+      "length": 830,
+      "distance": 700.794189453125,
+      "violations": {
+        "RG1": 19,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 152,
+        "RI1": 830,
+        "RI2": 342
+      },
+      "viol_steps": 830,
+      "mean_speed": 8.469688260050347
+    },
+    {
+      "seed": 54,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 4,
+      "lane_changes": 6,
+      "return": 691.521725768471,
+      "native_return": 691.521725768471,
+      "length": 783,
+      "distance": 652.8577270507812,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 100,
+        "RI1": 783,
+        "RI2": 545
+      },
+      "viol_steps": 783,
+      "mean_speed": 8.368727944368388
+    },
+    {
+      "seed": 55,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 0,
+      "lane_changes": 11,
+      "return": 337.3381227094524,
+      "native_return": 337.3381227094524,
+      "length": 386,
+      "distance": 328.3106689453125,
+      "violations": {
+        "RG1": 6,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 0,
+        "RI1": 386,
+        "RI2": 318
+      },
+      "viol_steps": 386,
+      "mean_speed": 8.597080856169557
+    },
+    {
+      "seed": 56,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 0,
+      "lane_changes": 2,
+      "return": 387.83966976558605,
+      "native_return": 387.83966976558605,
+      "length": 429,
+      "distance": 376.7252197265625,
+      "violations": {
+        "RG1": 44,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 1,
+        "RI1": 429,
+        "RI2": 389
+      },
+      "viol_steps": 429,
+      "mean_speed": 8.80959631967304
+    },
+    {
+      "seed": 57,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 3,
+      "lane_changes": 10,
+      "return": 740.9897849563192,
+      "native_return": 740.9897849563192,
+      "length": 871,
+      "distance": 700.2752685546875,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 158,
+        "RI1": 871,
+        "RI2": 537
+      },
+      "viol_steps": 871,
+      "mean_speed": 8.083032406900859
+    },
+    {
+      "seed": 58,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 3,
+      "lane_changes": 15,
+      "return": 577.1139879124879,
+      "native_return": 577.1139879124879,
+      "length": 650,
+      "distance": 557.671630859375,
+      "violations": {
+        "RG1": 11,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 103,
+        "RI1": 650,
+        "RI2": 390
+      },
+      "viol_steps": 650,
+      "mean_speed": 8.657674651637349
+    },
+    {
+      "seed": 59,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 0,
+      "lane_changes": 6,
+      "return": 250.82221045439493,
+      "native_return": 250.82221045439493,
+      "length": 273,
+      "distance": 245.74070739746094,
+      "violations": {
+        "RG1": 29,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 0,
+        "RI1": 273,
+        "RI2": 125
+      },
+      "viol_steps": 273,
+      "mean_speed": 9.091624848466443
+    },
+    {
+      "seed": 60,
+      "crashed": true,
+      "on_road_pct": 100.0,
+      "overtakes": 1,
+      "lane_changes": 1,
+      "return": 360.6916593733624,
+      "native_return": 360.6916593733624,
+      "length": 407,
+      "distance": 350.77874755859375,
+      "violations": {
+        "RG1": 26,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 18,
+        "RI1": 407,
+        "RI2": 397
+      },
+      "viol_steps": 407,
+      "mean_speed": 8.643688816985536
+    },
+    {
+      "seed": 61,
+      "crashed": false,
+      "on_road_pct": 100.0,
+      "overtakes": 4,
+      "lane_changes": 9,
+      "return": 687.3973032715091,
+      "native_return": 687.3973032715091,
+      "length": 753,
+      "distance": 648.9271240234375,
+      "violations": {
+        "RG1": 0,
+        "RG2": 0,
+        "RG3": 0,
+        "RG4": 106,
+        "RI1": 753,
+        "RI2": 303
+      },
+      "viol_steps": 753,
+      "mean_speed": 8.669031927599237
+    }
+  ],
+  "seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009
+  ]
+}

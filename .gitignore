@@ -15,4 +15,19 @@ tb/
 
 .DS_Store
 
-presentation/
+/presentation/
+
+# the presentation clips are small and belong to the repo
+!paper/presentation/videos/
+!paper/presentation/videos/*.mp4
+
+# LaTeX build files
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz

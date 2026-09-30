@@ -6,7 +6,7 @@ full explanation and the results. Short summary of the completed work:
 ## Part 1 — teach a car to drive (highway-env)
 - Built the driving environment and an aggressive-overtaking reward (fast driving + passing scores,
   crashing is punished).
-- Trained and compared three algorithms — RecurrentPPO, DQN, QR-DQN — on equal terms.
+- Trained and compared three algorithms — PPO, DQN, QR-DQN — on equal terms.
 - Evaluated them on the same test runs, with training curves and comparison plots.
 - Picked the best driver (**QR-DQN**) and recorded a demo video.
 

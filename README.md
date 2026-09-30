@@ -1,207 +1,185 @@
-# nesy-highway-driving
+# Neuro-Symbolic Safe Driving
 
-**The idea:** a neural network learns to drive and overtake on a highway, and then
-real traffic rules — taken from published papers and written as logic — are added on top to make the
-car safe, and to *measure* and *explain* how safe it is.
+A neural network learns to drive and overtake on a busy highway. Real traffic law, taken from a
+published paper and written as logic, is then added on top to make the car safe, and to **measure**
+and **explain** how safe it is.
 
-**Neuro-Symbolic (NeSy)** means combining a **neural network** (learns from data, fast, but a black
-box) with **symbolic rules** (written by humans, clear and checkable). This project does exactly that,
-in three steps — one Colab notebook each.
+<p align="center">
+  <img src="paper/presentation/videos/part3_winner_3d.gif" width="520" alt="The final driver in the MetaDrive 3-D simulator"><br>
+  <sub>The final driver (MCTS planner + rule shield) in MetaDrive, a 3-D world it never trained in.</sub>
+</p>
 
-> Every rule violation is counted by a separate, **independent checker** — never by the reward or the
-> shield the car is trained with. So the numbers below are honest and can be audited. All results
-> shown are the real measured results of the project.
-
----
-
-## The three parts
-
-The notebooks run in order. Each one saves its result to Google Drive, and the next one picks it up.
-
-| Notebook | Part | What it does |
+| Part | Question | Answer |
 |---|---|---|
-| `notebooks/colab_1_baseline.ipynb` | **Part 1** | train three algorithms to drive, pick the best |
-| `notebooks/colab_2_nesy.ipynb` | **Part 2** | add the traffic rules three ways, compare them |
-| `notebooks/colab_3_metadrive.ipynb` | **Part 3** | move the best driver to a 3D robot simulator, keep it safe with the labs |
+| **1. Learn to drive** | Which RL algorithm drives best? | **QR-DQN**: 78% crashes (DQN and PPO: 100%), and it drives the furthest |
+| **2. Apply the rules** | Which way of adding rules works best? | **Shield + reward**: fewest violations (0.97 vs 1.80). The shield alone cuts crashes 78% → 12% |
+| **3. A new world** | Do the rules still work in another simulator? | **Yes**: crashes 35% → 5%, and **MCTS + shield** stays safe *and* keeps overtaking |
+
+Every violation is counted by an **independent checker**, never by the reward or the shield the car
+uses. **Slides:** [`paper/presentation/nesy_presentation.pdf`](paper/presentation/nesy_presentation.pdf).
 
 ---
 
-## The main idea
+## The idea
 
-Two ideas shape the whole project:
+**Neuro-Symbolic AI** joins a **neural network** (learns by itself, fast, but a black box) with
+**symbolic rules** (written by humans, clear and checkable). The network drives; the rules check it
+and explain each decision. Three ways of adding the rules are compared:
 
-- **System 1 / System 2.** The trained neural network is fast, automatic thinking (System 1) — but a
-  black box. The traffic rules are slow, careful thinking (System 2) — clear and checkable.
-  Neuro-Symbolic AI is how we connect the two.
-- **Two ways to add rules to a learner.** *Shielding* blocks an unsafe action at the last moment
-  (safe, but can cost performance). *Reward shaping* teaches the rules during training (keeps
-  performance, but gives no guarantee). The project implements **both** and compares them.
+- **Shield**: block an unsafe move at the last moment. Safe with no re-training, but cautious.
+- **Reward shaping**: teach the rules during training. Keeps performance, but no guarantee.
+- **Planning (MCTS)**: look a few steps ahead and prefer legal moves. No training at all.
 
----
+## The rules
 
-## Part 1 — teach a car to drive
+The rules come from **Maierhofer et al., *Formalization of Interstate Traffic Rules in Temporal Logic*,
+IEEE IV 2020** ([PDF](paper/Formalization_of_Interstate_Traffic_Rules_in_Temporal_Logic.pdf)). The
+paper turns German traffic law and court rulings into **metric temporal logic** (logic with time:
+*always*, *eventually*, …), so a program can check every rule. On 2,500+ real German drivers, only
+37% obeyed every rule; safe distance and speed limit were the most broken.
 
-The simulator is **highway-env**: a 4-lane road with traffic. Our car (the "ego"):
-
-- **sees** the position and speed of itself and the 4 nearest cars (just numbers, not images);
-- **does** one of 5 moves — left, right, faster, slower, stay — twice a second;
-- **is rewarded** for speed and for passing cars, and punished for crashing.
-
-The reward is made **aggressive on purpose**, so the car learns to drive fast and take risks. This
-gives us a rule-breaking driver that Part 2 can then fix.
-
-We train three standard reinforcement-learning algorithms and compare them fairly (same road, same
-settings, same amount of training):
-
-- **DQN** — learns how good each move is *on average*.
-- **QR-DQN** — the same as DQN, but learns the *whole range* of outcomes, so it can see rare crashes.
-- **RecurrentPPO** — learns the behaviour directly, and has a small memory.
-
-**Result** (50 test runs each):
-
-| Algorithm | Crashes | Overtakes per run | |
+| Rule | Meaning | Kind | Used by |
 |---|---|---|---|
-| RecurrentPPO | 100% | 3.5 | slow to learn in this test |
-| DQN | 100% | 6.3 | fastest, but always crashes |
-| **QR-DQN** | **78%** | **5.4** | **survives longest → winner** |
+| RG1 | keep a safe distance from the car ahead | **hard** | shield (veto) |
+| RG3 | do not go over the speed limit | **hard** | shield (veto) |
+| RI1 | do not stop in the middle of the road | **hard** | shield (veto) |
+| RG2 | do not brake harshly for no reason | soft | reward (penalty) |
+| RG4 | do not block the traffic behind you | soft | reward (penalty) |
+| RI2 | do not overtake on the right | soft | reward (penalty) |
 
-QR-DQN wins because it is the only one that "sees" the rare crash instead of hiding it inside an
-average. 78% crashes is still a bad driver — on purpose; that is what Part 2 fixes.
-
----
-
-## The traffic rules
-
-The rules come from two published papers (Maierhofer et al., IEEE 2020 and 2022) that rewrite real
-German/EU traffic law as **temporal logic** — logic with a sense of time, e.g. "*always* keep a safe
-distance". Six rules are used:
-
-| Rule | Plain meaning | Kind |
-|---|---|---|
-| **RG1** | keep a safe distance from the car ahead | hard |
-| **RG3** | obey the speed limit | hard |
-| **RI1** | don't stop in the middle of the road | hard |
-| **RG2** | don't brake harshly for no reason | soft |
-| **RG4** | don't block the traffic behind you | soft |
-| **RI2** | don't overtake on the right (overtaking must be on the left) | soft |
-
-**Hard vs soft.** Hard rules are safety rules humans almost never break, so we **forbid** breaking
-them (a veto — the shield). Soft rules are comfort rules humans sometimes bend, so we **penalise**
-them, and the car learns to avoid them. This split copies how the papers measured real drivers.
-
-**Safe distance (RG1)** uses the standard stopping-distance idea: my reaction distance, plus my
-braking distance, minus the distance the car ahead gains by braking. If the real gap is smaller than
-that, RG1 is broken. All rule numbers live in one config file (`configs/highway.yaml`) and are
-traceable to the papers.
+Hard rules can directly cause a crash, so they are forbidden; soft rules are bad habits, so they are
+penalised (this split is the project's choice, not the paper's). RG1 uses the paper's safe distance
+$d_{\text{safe}} = v\,t_d + \frac{v^2}{2|a_{\text{ego}}|} - \frac{v_{\text{lead}}^2}{2|a_{\text{lead}}|}$
+with $t_d = 0.3$ s. All thresholds live in [`configs/highway.yaml`](configs/highway.yaml). The
+follow-up paper on **intersection** rules (IEEE IV 2022,
+[PDF](paper/Formalization_of_Intersection_Traffic_Rules_in_Temporal_Logic.pdf)) is future work.
 
 ---
 
-## Part 2 — add the rules
+## Part 1: Learn to drive
 
-Part 2 takes the trained QR-DQN and makes it obey the rules, in three ways, then compares them. First
-the scene is turned into simple true/false facts (called **predicates**), e.g. "am I too close?".
-Then:
+[highway-env](https://github.com/Farama-Foundation/HighwayEnv): 4 lanes, 50 cars, 40-second runs. The
+car sees itself and the 4 nearest cars, picks one of 5 moves twice a second, and is rewarded for speed
+and overtakes (aggressive on purpose). **DQN**, **QR-DQN** (DQN's twin that learns the whole range of
+outcomes) and **PPO** get the same 20k training steps and the same 50 test runs.
 
-- **Shield** — checks the chosen move and swaps it for a safe one if it breaks a hard rule. No
-  re-training.
-- **Reward shaping** — during a short re-training, the car loses reward when it breaks a soft rule,
-  so it learns better habits.
-- A third method, **MCTS planning**, is also included (it is used mainly in Part 3).
+![Part 1 training](paper/presentation/figures/p1_training.png)
+![Part 1 final test](paper/presentation/figures/p1_final_test.png)
 
-**Result** (same independent checker, on QR-DQN):
+DQN passes the most cars but always crashes: the best *average* is to drive flat out. **QR-DQN** is the
+only one that learns to avoid the rare crash, so it survives longest and wins.
 
-| Setup | Crashes | Overtakes per run | Rule-breaking |
-|---|---|---|---|
-| neural only | 78% | 5.4 | high |
-| + shield | 12% | 3.6 | lower |
-| + reward | 90% | 4.3 | medium |
-| + shield + reward | 24% | 3.3 | low |
-
-The shield fixes the hard rules (safe distance, speed) with no re-training; the reward fixes the soft
-habits (overtaking on the right, blocking traffic). Together they work best.
+<img src="paper/presentation/videos/part1_three_agents.gif" width="100%" alt="PPO, DQN and QR-DQN driving">
 
 ---
 
-## The robotics labs
+## Part 2: Apply the rules
 
-The safety layer is built from the course labs, connected together:
+The scene is turned into **true/false facts** ("too close?", "passing on the right?"). The same facts
+feed the shield, the reward, MCTS and the checker. Six setups are tested on QR-DQN:
 
-| Lab | What it gives | Used in |
-|---|---|---|
-| **Lab 1** | turns a move into a robot speed command (forward speed + turn rate) | Part 3 |
-| **Lab 2** | LIDAR: brake for close obstacles | Part 3 |
-| **Lab 3** | state machine that hosts the safety shield | Part 2 |
-| **Lab 4** | MCTS planner + a "is this gap safe?" test | Parts 2 & 3 |
-| **Lab 5** | the RL learner + a safety filter (Control Barrier Function) | Parts 1 & 3 |
+![Part 2 rule violations](paper/presentation/figures/p2_rule_violations.png)
 
----
+The **shield** fixes the hard rules, the **reward** fixes the soft ones, so **shield + reward** has the
+fewest violations. A setup is *allowed* if it crashes no more than the baseline and keeps at least half
+its overtakes:
 
-## Part 3 — a new simulator
+<p align="center"><img src="paper/presentation/figures/p2_tradeoff.png" width="560" alt="Crash rate vs overtakes"></p>
 
-Part 3 takes the trained QR-DQN (which has never seen this world) and drops it into **MetaDrive**, a
-3D simulator with realistic physics. It drives there through the labs: the model picks a move → the
-shield checks it → Lab 1 turns it into a robot speed command → the safety filters (barrier function,
-velocity obstacles, LIDAR) clean it → the car moves.
-
-This tests whether the safety comes from the **rules** or from the **network**. Three setups are
-compared:
-
-| Setup | Crashes | Overtakes per run |
-|---|---|---|
-| brain only (no rules) | 35% | 2.15 |
-| + shield | 5% | 1.40 |
-| **MCTS + shield** | **5%** | **2.15 → best** |
-
-MCTS wins here: it uses the rules *before* acting (so its moves are already legal), and it plans on
-the real scene (so a world it never trained on does not confuse it). This gives the safety of the
-shield **and** the overtaking of the bare model.
-
-**One rule, three encodings.** The same safe-distance rule appears as (1) a logic fact, (2) a blocked
-move in the shield, and (3) a math safety filter — and all three always agree. This shows the rule
-survived the move to the new world unchanged. (This check also runs on its own, without MetaDrive.)
+<img src="paper/presentation/videos/part2_six_setups.gif" width="100%" alt="The six Part 2 setups">
 
 ---
 
-## How to run (Google Colab)
+## Part 3: A new world
 
-1. Open a notebook in Colab and choose **Runtime → Run all**.
-2. When asked, paste a **GitHub token** (the repo is private); the setup cell clones the code and
-   installs the libraries.
-3. Run the parts **in order**: Part 1 → Part 2 → Part 3. Each part loads the previous part's result
-   from Drive.
-4. **Part 3 only:** MetaDrive needs Python ≤ 3.11, so its first cell installs a Python-3.10 runtime
-   and restarts the kernel once. This is expected — just choose **Run all** again. The 3D video needs
-   a GPU runtime; on CPU it uses a top-down view instead.
+The frozen QR-DQN drives a robot car in [MetaDrive](https://github.com/metadriverse/metadrive) (3-D
+physics, 3 lanes, robot-scale speeds), through the course labs:
+
+```mermaid
+flowchart LR
+  B["QR-DQN<br/>(Lab 5)"] --> S["Shield<br/>(Lab 3)"] --> C["Speed command v, ω<br/>(Lab 1)"] --> F["CBF + VO + LIDAR<br/>(Labs 5, 4, 2)"] --> W["MetaDrive"]
+  W -- next scene --> B
+```
+
+| brain only | + shield | MCTS + shield |
+|:---:|:---:|:---:|
+| <img src="paper/presentation/videos/part3_brain_only.gif" width="100%"> | <img src="paper/presentation/videos/part3_shield.gif" width="100%"> | <img src="paper/presentation/videos/part3_mcts_shield.gif" width="100%"> |
+| **35%** crashes, 2.15 passes | **5%** crashes, 1.40 passes | **5%** crashes, **2.15** passes |
+
+![Part 3 rule violations](paper/presentation/figures/p3_rule_violations.png)
+
+The CBF keeps the hard rules at ≈0. **MCTS** wins: it plans on the real scene and uses the rules
+*before* acting, so it stays safe and still overtakes. RI1 is a threshold artifact ("stopped" = below
+18 m/s, but the robot drives at ≈8 m/s). The same safe-distance rule, written as a logic fact, a
+blocked move and a CBF barrier, always agrees (`rule_encoding_agreement` in
+[`nesy/roadmap.py`](nesy/roadmap.py)).
 
 ---
+
+## Why are some hard rules still broken with the shield?
+
+<p align="center"><img src="paper/presentation/figures/hard_rules_shield.png" width="440" alt="Hard-rule violations with and without the shield"></p>
+
+The highway shield cuts the hard rules a lot, but not to zero. A replay of the same 50 test runs
+(matching the saved results exactly) shows the cause of every violating step:
+
+![Why hard rules still break](paper/presentation/figures/shield_causes.png)
+
+- **It acts only after the fact.** It brakes once the rule is already broken, and speed changes
+  gradually (≈0.6 s), so the gap needs time to reopen (58% of RG1). 5 of the 6 crashes: ran into the
+  car ahead.
+- **It checks now, not next.** Below 25 m/s `FASTER` is allowed, but it sets the target to 30 m/s and
+  the car overshoots (60% of RG3). Gaps also close during a step it allowed (20% of RG1).
+- **Small gaps in the mask.** `IDLE` stays allowed when too close, and lane changes when over the limit.
+  Cut-ins by other cars are only 3%.
+
+The fix is a **predictive** shield that checks the state *after* the move. The CBF in MetaDrive already
+works this way on the continuous speed, and brings both rules to ≈0.
+
+---
+
+## What we learned
+
+- A reward alone is not enough: the network drives fast but crashes.
+- A **shield** makes it safe with no re-training; a **shaped reward** teaches habits; together they fix
+  different rules.
+- **MCTS + shield** was safe and overtaking in a world it never trained on.
+- The same rules worked in two simulators, checked by an independent monitor.
+
+**Limits:** short training (20k steps), small tests (50 highway runs, 20 MetaDrive runs), highway
+thresholds on a slow robot. **Next:** add the 2022 intersection rules and switch rule sets with the
+environment.
+
+---
+
+## How to run
+
+Open a notebook in Google Colab and choose **Runtime → Run all**, in order:
+[`colab_1_baseline`](notebooks/colab_1_baseline.ipynb) →
+[`colab_2_nesy`](notebooks/colab_2_nesy.ipynb) →
+[`colab_3_metadrive`](notebooks/colab_3_metadrive.ipynb). Each part saves its result to Google Drive for
+the next. Paste a GitHub token when asked (private repo). Part 3 installs Python 3.10 and restarts
+once; choose **Run all** again. The 3-D video needs a local machine with a display.
+
+**Slides and charts:**
+
+```bash
+cd paper/presentation && python make_figures.py && latexmk -pdf nesy_presentation.tex
+```
 
 ## Project structure
 
 ```
 nesy-highway-driving/
-├── README.md              # this file
-├── TODO.md                # short status: what is done
-├── requirements.txt       # Python libraries
-├── configs/highway.yaml   # one config file: all settings and rule numbers
+├── configs/highway.yaml   # all settings and rule thresholds
 ├── notebooks/             # the three Colab notebooks (the only place code runs)
-├── envs/                  # build the two simulators + read the scene
-├── agents/baselines.py    # train the RL algorithms, load a model
+├── envs/                  # the two simulators + scene reading
+├── agents/baselines.py    # train and load the RL agents
 ├── nesy/roadmap.py        # the rules: predicates, shield, independent checker
-├── labs/                  # the five course labs
+├── labs/                  # course labs: speed command, LIDAR, FSM shield, MCTS + VO, CBF
 ├── eval/                  # evaluation + plots
-├── demo/                  # standalone scripts that record the videos
-└── paper/                 # the traffic-rule papers
+├── demo/                  # scripts that record the videos
+├── tests/                 # smoke tests
+└── paper/                 # the two traffic-rule papers
+    └── presentation/      # slides (.tex/.pdf), make_figures.py, data/, figures/, videos/
 ```
-
-**Conventions.** The `.py` files hold functions only — the notebooks are the only place code runs.
-Everything is set in one config file (`configs/highway.yaml`), nothing is hard-coded. The same fixed
-test runs are used for every algorithm and every setup, so all comparisons are fair.
-
----
-
-## Papers
-
-- **Interstate traffic rules** — Maierhofer et al., *IEEE IV 2020* — safe distance, braking, speed,
-  flow, no stopping, no overtaking on the right. Used in Parts 1–2. (PDF in `paper/`.)
-- **Intersection traffic rules** — Maierhofer et al., *IEEE IV 2022* — used as the basis for Part 3.
-  (PDF in `paper/`.)

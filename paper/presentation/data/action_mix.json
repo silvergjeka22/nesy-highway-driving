@@ -1,0 +1,32 @@
+{
+  "ppo": {
+    "actions": {
+      "FASTER": 791,
+      "LANE_LEFT": 267,
+      "LANE_RIGHT": 26
+    },
+    "crash_rate": 1.0,
+    "overtakes_mean": 3.5
+  },
+  "dqn": {
+    "actions": {
+      "LANE_RIGHT": 219,
+      "FASTER": 221,
+      "IDLE": 1113,
+      "LANE_LEFT": 44
+    },
+    "crash_rate": 1.0,
+    "overtakes_mean": 6.26
+  },
+  "qrdqn": {
+    "actions": {
+      "LANE_RIGHT": 734,
+      "FASTER": 630,
+      "SLOWER": 318,
+      "LANE_LEFT": 416,
+      "IDLE": 163
+    },
+    "crash_rate": 0.78,
+    "overtakes_mean": 5.36
+  }
+}
