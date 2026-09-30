@@ -1,0 +1,57 @@
+{
+  "episodes": 50,
+  "steps": 3663,
+  "crash_rate": 0.12,
+  "violation_rate": {
+    "RG1": 0.06442806442806442,
+    "RG2": 0.18564018564018564,
+    "RG3": 0.16352716352716354,
+    "RG4": 0.3346983346983347,
+    "RI1": 0.000819000819000819,
+    "RI2": 0.41223041223041224
+  },
+  "violations": {
+    "RG1": 236,
+    "RG2": 680,
+    "RG3": 599,
+    "RG4": 1226,
+    "RI1": 3,
+    "RI2": 1510
+  },
+  "rg1_cause": {
+    "already close, braking (lag)": 136,
+    "gap closed during the step (FASTER)": 31,
+    "own lane change": 26,
+    "already close, shield allowed IDLE": 21,
+    "gap closed during the step (IDLE)": 13,
+    "another car cut in": 6,
+    "gap closed during the step (SLOWER)": 3
+  },
+  "rg1_excused_by_paper_cutin_rule": 6,
+  "rg3_cause": {
+    "FASTER allowed just under the limit": 360,
+    "already over, braking (lag)": 207,
+    "already over, shield allowed LANE_LEFT": 12,
+    "already over, shield allowed IDLE": 11,
+    "already over, shield allowed LANE_RIGHT": 9
+  },
+  "rg3_within_0.5_mps": 10,
+  "ri1_cause": {
+    "crash": 3
+  },
+  "crash_cause": {
+    "ran into the car ahead": 5,
+    "hit from behind": 1
+  },
+  "shield_interventions": {
+    "LANE_RIGHT->IDLE": 921,
+    "LANE_LEFT->IDLE": 597,
+    "FASTER->SLOWER": 458,
+    "LANE_RIGHT->SLOWER": 130,
+    "LANE_LEFT->SLOWER": 78,
+    "LANE_RIGHT->LANE_LEFT": 44,
+    "IDLE->SLOWER": 33,
+    "FASTER->LANE_LEFT": 18,
+    "IDLE->LANE_LEFT": 2
+  }
+}
